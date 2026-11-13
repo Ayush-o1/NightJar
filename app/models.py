@@ -4,21 +4,38 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app import __version__
 
 # ──────────────────────────────── Request ────────────────────────────────
 
 
+ALLOWED_ROLES = frozenset({"system", "developer", "user", "assistant", "tool", "function"})
+
+
 class ChatMessage(BaseModel):
-    """A single message in the conversation."""
+    """A single message in the conversation.
+
+    ``content`` is a string, a list of content parts (``{"type": "text", ...}``,
+    ``{"type": "image_url", ...}``), or None (assistant messages that only carry
+    ``tool_calls``) — the shapes the OpenAI API accepts.
+    """
 
     role: str
-    content: str | None = None
+    content: str | list[Any] | None = None
     name: str | None = None
     tool_calls: list[Any] | None = None
     tool_call_id: str | None = None
+
+    @field_validator("role")
+    @classmethod
+    def _known_role(cls, v: str) -> str:
+        if v not in ALLOWED_ROLES:
+            raise ValueError(f"unknown role {v!r}; expected one of {sorted(ALLOWED_ROLES)}")
+        return v
+
+    model_config = {"extra": "allow"}
 
 
 class ChatCompletionRequest(BaseModel):
@@ -28,17 +45,17 @@ class ChatCompletionRequest(BaseModel):
     are forwarded transparently via model_config.
     """
 
-    model: str
-    messages: list[ChatMessage]
-    temperature: float | None = None
-    top_p: float | None = None
-    n: int | None = None
+    model: str = Field(min_length=1, max_length=200)
+    messages: list[ChatMessage] = Field(min_length=1)
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    top_p: float | None = Field(default=None, ge=0, le=1)
+    n: int | None = Field(default=None, ge=1, le=16)
     stream: bool = False
     stop: str | list[str] | None = None
-    max_tokens: int | None = None
-    presence_penalty: float | None = None
-    frequency_penalty: float | None = None
-    user: str | None = None
+    max_tokens: int | None = Field(default=None, ge=1)
+    presence_penalty: float | None = Field(default=None, ge=-2, le=2)
+    frequency_penalty: float | None = Field(default=None, ge=-2, le=2)
+    user: str | None = Field(default=None, max_length=256)
 
     model_config = {"extra": "allow"}
 
@@ -143,3 +160,5 @@ class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = __version__
     redis: str = "unknown"
+    # Provider calls in flight, the limit, and how many requests were shed (503) since start.
+    upstream: dict[str, int] | None = None

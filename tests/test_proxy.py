@@ -101,21 +101,23 @@ class TestChatCompletionsNonStreaming:
         assert data["system_fingerprint"] == "fp_abc123"
         assert data["choices"][0]["finish_reason"] == "stop"
 
-    def test_missing_messages_returns_422(self, test_client):
+    def test_missing_messages_returns_400(self, test_client):
         """Verify request validation rejects missing messages field."""
         resp = test_client.post(
             "/v1/chat/completions",
             json={"model": "gpt-3.5-turbo"},
         )
-        assert resp.status_code == 422
+        assert resp.status_code == 400
+        assert resp.json()["error"]["type"] == "invalid_request_error"
 
-    def test_missing_model_returns_422(self, test_client):
+    def test_missing_model_returns_400(self, test_client):
         """Verify request validation rejects missing model field."""
         resp = test_client.post(
             "/v1/chat/completions",
             json={"messages": [{"role": "user", "content": "Hi"}]},
         )
-        assert resp.status_code == 422
+        assert resp.status_code == 400
+        assert resp.json()["error"]["type"] == "invalid_request_error"
 
     def test_extra_fields_forwarded(
         self,
@@ -230,17 +232,17 @@ class TestErrorPropagation:
         resp = test_client.post("/v1/chat/completions", json=sample_request_body)
 
         assert resp.status_code == 429
-        data = resp.json()
-        assert "error" in data
-        assert data["error"]["code"] == "429"
+        err = resp.json()["error"]
+        assert err["type"] == "rate_limit_error"
+        assert err["code"] == "upstream_rate_limit"
 
-    def test_upstream_500_returns_500(
+    def test_upstream_500_returns_502(
         self,
         test_client,
         mock_proxy_client,
         sample_request_body,
     ):
-        """Verify upstream 500 is propagated."""
+        """An upstream 500 is the gateway's problem to report as 502 Bad Gateway."""
         mock_proxy_client.forward.side_effect = UpstreamError(
             status_code=500,
             detail="Internal server error",
@@ -248,7 +250,8 @@ class TestErrorPropagation:
 
         resp = test_client.post("/v1/chat/completions", json=sample_request_body)
 
-        assert resp.status_code == 500
+        assert resp.status_code == 502
+        assert resp.json()["error"]["type"] == "upstream_error"
         data = resp.json()
         assert data["error"]["type"] == "upstream_error"
 
@@ -306,7 +309,8 @@ class TestTelemetryRecording:
         before = self._count()
 
         resp = test_client.post("/v1/chat/completions", json={"model": "gpt-3.5-turbo"})
-        assert resp.status_code == 422
+        assert resp.status_code == 400
+        assert resp.json()["error"]["type"] == "invalid_request_error"
 
         assert self._count() == before
 

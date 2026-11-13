@@ -11,11 +11,12 @@ compress_context_with_metadata(...)
 """
 from __future__ import annotations
 
+import hashlib
 import logging
-
-import tiktoken
+from collections import OrderedDict
 
 from app.config import Settings
+from app.tokens import content_to_text, count_message_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -29,24 +30,27 @@ _SUMMARY_PROMPT = (
 
 _SUMMARY_MARKER = "[SUMMARY OF EARLIER CONVERSATION]"
 
+# Summaries are memoised per (summary model, exact turns summarised). A long conversation sends
+# the same early turns on every request; without this each request would pay for the same
+# summarisation again, which can cost more than the compression saves. In-process, bounded LRU.
+_SUMMARY_MEMO_SIZE = 256
+_summary_memo: "OrderedDict[str, str]" = OrderedDict()
+
+
+def _memo_key(model: str, transcript: str) -> str:
+    return hashlib.sha256(f"{model}\x1f{transcript}".encode()).hexdigest()
+
+
+def clear_summary_memo() -> None:
+    _summary_memo.clear()
+
 
 # ─── Token counting ───────────────────────────────────────────────────────
 
 
 def count_tokens(messages: list[dict], model: str = "gpt-3.5-turbo") -> int:
-    """Count total tokens across all messages using tiktoken.
-
-    Adds 4 tokens per message to match the OpenAI chat format overhead
-    (role + separators).  Falls back to cl100k_base for unknown models.
-    """
-    try:
-        enc = tiktoken.encoding_for_model(model)
-    except KeyError:
-        enc = tiktoken.get_encoding("cl100k_base")
-    total = 0
-    for msg in messages:
-        total += len(enc.encode(msg.get("content", "") or "")) + 4
-    return total
+    """Total tokens across messages (bounded per message, includes tool calls; see app/tokens.py)."""
+    return count_message_tokens(messages, model)
 
 
 # ─── Compression trigger ──────────────────────────────────────────────────
@@ -92,6 +96,13 @@ def _split_messages(
     system_msgs = [m for m in messages if m.get("role") == "system"]
     non_system = [m for m in messages if m.get("role") != "system"]
     split_idx = max(1, len(non_system) - keep_recent)
+    # Never separate an assistant message that made tool calls from the tool replies that follow
+    # it: providers reject a `tool` message whose call is missing. If the first kept turn is a
+    # tool reply, pull the boundary back so the whole call/reply group stays verbatim.
+    while split_idx > 0 and non_system[split_idx].get("role") == "tool":
+        split_idx -= 1
+    if split_idx == 0:
+        return system_msgs, [], non_system
     turns_to_summarize = non_system[:split_idx]
     recent_turns = non_system[split_idx:]
     return system_msgs, turns_to_summarize, recent_turns
@@ -100,7 +111,7 @@ def _split_messages(
 def _format_turns_for_summary(turns: list[dict]) -> str:
     """Render a list of message dicts as a readable turn-by-turn transcript."""
     return "\n".join(
-        f"{m['role'].upper()}: {m.get('content', '')}" for m in turns
+        f"{m['role'].upper()}: {content_to_text(m.get('content'))}" for m in turns
     )
 
 
@@ -178,13 +189,22 @@ async def compress_context_with_metadata(
 
     try:
         transcript = _format_turns_for_summary(turns_to_summarize)
-        summary_prompt = _SUMMARY_PROMPT.format(turns=transcript)
-
-        summary_response = await proxy_client.simple_completion(
-            messages=[{"role": "user", "content": summary_prompt}],
-            model=settings.compress_summary_model,
-        )
-        summary_text = summary_response["choices"][0]["message"]["content"]
+        memo_key = _memo_key(settings.compress_summary_model, transcript)
+        summary_text = _summary_memo.get(memo_key)
+        if summary_text is not None:
+            _summary_memo.move_to_end(memo_key)
+        else:
+            summary_prompt = _SUMMARY_PROMPT.format(turns=transcript)
+            summary_response = await proxy_client.simple_completion(
+                messages=[{"role": "user", "content": summary_prompt}],
+                model=settings.compress_summary_model,
+            )
+            summary_text = (summary_response["choices"][0]["message"]["content"] or "").strip()
+            if not summary_text:
+                raise ValueError("summariser returned no text")
+            _summary_memo[memo_key] = summary_text
+            while len(_summary_memo) > _SUMMARY_MEMO_SIZE:
+                _summary_memo.popitem(last=False)
 
         summary_message = {
             "role": "user",

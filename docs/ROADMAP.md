@@ -41,20 +41,20 @@ Each phase ends with: tests added and passing, `ruff` clean, full suite green, a
 - **Risks:** litellm pin breaks something → run the suite on the pinned version before committing.
 - **Acceptance:** `grep -ri contextforge` returns only intentional compatibility code and historical docs; `uv sync` reproduces the environment; deprecated names still work (tested).
 
-### Phase 3 — Core API and request lifecycle
+### Phase 3 — Core API and request lifecycle  ✅
 - **Problem:** audit A-1, E-1, E-2, validation gaps, no request IDs.
 - **Features:** `app/errors.py` (error types → OpenAI-shaped bodies); pure-ASGI middleware (request ID, body size limit with 413, timing); OpenAI-shaped error responses for validation, auth, upstream and unexpected errors; `content` accepts string or part lists; `messages` must be non-empty; character budget before tokenization; CPU-bound work off the event loop; streaming errors become in-band SSE `error` events; `X-Request-ID` on every response.
 - **API:** error body is `{"error": {"message","type","param","code"}}` everywhere. Validation errors change from FastAPI's `detail` to this shape: **breaking for clients that parse `detail`**; documented.
 - **Tests:** 1 MB hostile input returns 413 and `/health` stays responsive; malformed JSON, empty messages, list content, streaming mid-stream failure, unexpected exception.
 - **DoD:** the baseline's 10 MB probe is rerun and no longer stalls the server (bounded size reproduced, not the 10 MB case, to avoid hanging the check).
 
-### Phase 4 — Routing and provider layer
+### Phase 4 — Routing and provider layer  ✅ (partly; deployments config moved to Phase 7)
 - **Problem:** R-1, R-2, S-3, stale model names, ignored YAML sections.
 - **Features:** explicit model honored by default; routing via alias `nightjar/auto` or `ROUTING_MODE=always`; whole-word matching; structured decision (`rule`, `matched`, `tier`, `token_estimate`); tiers, model lists and fallback chains loaded from one validated config file, and the YAML sections that were never read are either read or removed; override header gated by key permission (Phase 9) and an allow-list.
 - **Tests:** requested model respected; alias routes; word-boundary cases (`which`, `know`, `token`); config validation errors; fallback chain loaded from file.
 - **Acceptance:** README accuracy claim replaced by measured numbers on an extended labeled set with hard cases.
 
-### Phase 5 — Cache correctness
+### Phase 5 — Cache correctness  ✅
 - **Problem:** C-1…C-3, C-5…C-7.
 - **Features:** request fingerprint; exact tier; partitioned, gated semantic tier (opt-in); eligibility rules; TTL-aware vector eviction; timer-based atomic persistence; single-flight for concurrent identical misses; adaptive threshold removed, endpoints return `410 Gone` with a pointer for one release; `scripts/calibrate_threshold.py` for offline calibration; labeled pair set with measured false-hit rate.
 - **DB:** none (metadata beside vectors). **API:** `X-Cache: HIT|MISS|BYPASS`, `X-Cache-Tier: exact|semantic`.
@@ -62,13 +62,13 @@ Each phase ends with: tests added and passing, `ruff` clean, full suite green, a
 - **Tests:** against real Redis and real FAISS (integration) plus unit tests; concurrent-miss test asserts one upstream call; the baseline's false-hit pairs are regression tests.
 - **Acceptance:** none of the baseline false-hit pairs served at default settings, or the ones that still are (unit-order swaps) are listed in the docs as known limits.
 
-### Phase 6 — Context compression
+### Phase 6 — Context compression  ✅
 - **Problem:** C-4, C-8.
 - **Features:** compression runs *after* cache lookup, on the miss path only; never splits an assistant `tool_calls` message from its `tool` replies; token counts include tool calls; summary memoized per conversation prefix; summary clearly delimited; failure falls back to uncompressed; compression off for requests with tools unless opted in.
 - **Tests:** tool-call boundary, memoization hit, failure fallback, ratio recorded.
 - **Acceptance:** a measured example of tokens before/after with the summarizer stubbed, labeled as such.
 
-### Phase 7 — Reliability
+### Phase 7 — Reliability  ✅ (retry budget and config-driven fallbacks not done)
 - **Problem:** unbounded waits, default cooldown behavior, no retry budget.
 - **Features:** per-request timeout and overall deadline; Router `allowed_fails_policy`/`retry_policy` so auth and bad-request errors neither retry nor cool down; retry budget; global concurrency limit with `503` + `Retry-After`; upstream cancellation on client disconnect; error-message mapping (no raw provider text).
 - **Tests:** against a **local fake upstream** with scripted latency, 429s, 500s, hangs and malformed JSON: retries bounded, fallbacks used, auth error not retried, saturation sheds load, disconnect cancels.

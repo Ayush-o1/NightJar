@@ -15,19 +15,30 @@ from redis.asyncio import Redis
 
 from app import __version__
 from app import telemetry as tel
-from app.adaptive import ThresholdManager, get_active_threshold
 from app.api.admin import router as admin_router
+from app.asgi import RequestContextMiddleware
 from app.auth import require_api_key
-from app.cache import SemanticCache
+from app.cache import FlightAborted, ResponseCache
 from app.compat import get_header
 from app.compressor import compress_context
 from app.config import Settings, get_settings
 from app.embedder import Embedder
+from app.errors import (
+    NightJarError,
+    context_too_large,
+    from_upstream,
+    install_error_handlers,
+    redact_secrets,
+    sse_error_event,
+)
+from app.fingerprint import build_fingerprint
+from app.limits import ConcurrencyLimiter
 from app.middleware import TelemetryMiddleware
-from app.models import ChatCompletionRequest, HealthResponse
+from app.models import ChatCompletionRequest, ChatMessage, HealthResponse
 from app.proxy import ProxyClient, UpstreamError
 from app.router import ModelRouter
-from app.vector_store import VectorStore
+from app.tokens import total_text_chars
+from app.vector_index import VectorIndex
 
 logger = structlog.get_logger()
 
@@ -67,29 +78,32 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     application.state.proxy_client = proxy_client
     application.state.settings = settings
 
-    # --- Embedding model ---
-    embedder = Embedder()
+    # --- Embedding model: only loaded when the semantic tier is on (it is the heavy part) ---
+    embedder = Embedder() if settings.semantic_cache else None
     application.state.embedder = embedder
 
-    # --- Vector store (FAISS) ---
-    vector_store = VectorStore(
-        dimension=embedder.dimension,
-        index_path=settings.faiss_index_path,
+    # --- Vector index (in-process; persisted to a local file) ---
+    index = VectorIndex(
+        dimension=embedder.dimension if embedder else 384,
+        max_entries=settings.cache_max_entries,
     )
-    application.state.vector_store = vector_store
+    if embedder:
+        logger.info("vector_index.loaded", entries=index.load(settings.vector_index_path))
+    application.state.vector_index = index
 
-    # --- Redis ---
-    redis_client = Redis.from_url(settings.redis_url, decode_responses=True)
+    # --- Redis (short timeouts: a hung Redis must not stall requests) ---
+    redis_client = Redis.from_url(
+        settings.redis_url, decode_responses=True, socket_timeout=1.0, socket_connect_timeout=1.0,
+    )
     application.state.redis = redis_client
 
-    # --- Semantic cache ---
-    cache = SemanticCache(
-        embedder=embedder,
-        vector_store=vector_store,
-        redis=redis_client,
-        settings=settings,
-    )
+    # --- Response cache ---
+    cache = ResponseCache(embedder=embedder, index=index, redis=redis_client, settings=settings)
+    cache.start_maintenance()
     application.state.cache = cache
+    logger.info("cache.ready", semantic_enabled=cache.semantic_enabled, ttl_seconds=settings.cache_ttl_seconds)
+
+    application.state.limiter = ConcurrencyLimiter(settings.max_concurrent_upstream)
 
     # --- Model router (with test_mode support) ---
     router = ModelRouter(
@@ -98,15 +112,12 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
         test_mode=settings.test_mode,
         simple_model=settings.simple_model,
         complex_model=settings.complex_model,
+        routing_mode=settings.routing_mode,
     )
     application.state.router = router
 
     # --- Telemetry DB ---
     tel.init_db()
-
-    # --- Adaptive threshold manager ---
-    threshold_manager = ThresholdManager(db_path=settings.sqlite_db_path)
-    application.state.threshold_manager = threshold_manager
 
     for name in settings.deprecated_settings_in_use:
         logger.warning("deprecated.setting", setting=name, use_instead="NIGHTJAR_API_KEYS")
@@ -128,6 +139,7 @@ app = FastAPI(
 
 # ─── Middleware (order matters: first added = outermost) ─────────────────
 # TelemetryMiddleware MUST be registered to write per-request telemetry.
+# Added first => innermost; RequestContextMiddleware (added last) is outermost.
 app.add_middleware(TelemetryMiddleware)
 
 _settings_for_cors = get_settings()
@@ -141,6 +153,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Outermost: assigns the request id, enforces the body limit, catches anything unhandled.
+app.add_middleware(RequestContextMiddleware, max_body_bytes=_settings_for_cors.max_request_bytes)
+install_error_handlers(app)
 
 # ─── Mount static dashboard at /dashboard ────────────────────────────────
 _dashboard_dir = Path(__file__).resolve().parent.parent / "docs" / "dashboard"
@@ -172,7 +187,8 @@ async def health_check(request: Request) -> HealthResponse:
             redis_status = "ok"
         except Exception:  # noqa: BLE001
             redis_status = "unreachable"
-    return HealthResponse(redis=redis_status)
+    limiter = getattr(request.app.state, "limiter", None)
+    return HealthResponse(redis=redis_status, upstream=limiter.stats() if limiter else None)
 
 
 # ─────────────────── Chat Completions Endpoint ───────────────────────────
@@ -191,10 +207,9 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
     Streaming requests bypass cache and compression.
     """
     proxy_client: ProxyClient = request.app.state.proxy_client
-    cache: SemanticCache = request.app.state.cache
+    cache: ResponseCache = request.app.state.cache
     router: ModelRouter = request.app.state.router
     settings: Settings = request.app.state.settings
-    threshold_manager: ThresholdManager | None = getattr(request.app.state, "threshold_manager", None)
 
     # Set before the try block so TelemetryMiddleware still records which
     # model was requested even if routing/compression/cache/upstream fails
@@ -205,8 +220,13 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
     try:
         messages_dicts = [m.model_dump(exclude_none=True) for m in body.messages]
 
+        text_chars = total_text_chars(messages_dicts)
+        if text_chars > settings.max_prompt_chars:
+            raise context_too_large(text_chars, settings.max_prompt_chars)
+
         # --- Model routing ---
         override_model = get_header(request, "model-override")
+        _enforce_model_policy(settings, body.model, override_model)
         routing = router.route(body.model, messages_dicts, override_model=override_model)
         request.state.model_used = routing.model_selected
         request.state.tier = routing.tier.value
@@ -214,105 +234,199 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
 
         # Streaming bypasses cache and compression
         if body.stream:
-            return StreamingResponse(
-                proxy_client.forward_stream(body, model_override=routing.model_selected),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no",
-                    "X-Model-Tier": routing.tier.value,
-                    "X-Model-Selected": routing.model_selected,
-                },
-            )
+            return await _stream_response(proxy_client, body, routing, getattr(request.app.state, "limiter", None))
 
-        # --- Context compression ---
+        # --- Cache: fingerprint the ORIGINAL request, so the key reflects what the caller asked ---
+        cache_mode = (get_header(request, "cache") or "").lower()  # "", "bypass" or "refresh"
+        fp = build_fingerprint(
+            body.model_dump(exclude_none=True), messages_dicts, routing.model_selected,
+            max_temperature=settings.cache_max_temperature,
+        )
+        use_cache = fp.eligible and cache_mode != "bypass"
+        cache_header = "MISS" if use_cache else "BYPASS"
+        bypass_reason = None if use_cache else ("client_bypass" if fp.eligible else f"ineligible:{fp.reason}")
+
+        if use_cache and cache_mode != "refresh":
+            result = await cache.lookup(fp)
+            if result.hit:
+                return _cache_hit_response(request, routing, result.response, result.tier, result.similarity_score)
+
+        # --- Single-flight: identical requests already running share one upstream call ---
+        flight = cache.begin_flight(fp.exact_key) if use_cache else None
+        if flight is not None and not flight.leader:
+            try:
+                return _cache_hit_response(request, routing, await flight.wait(), "coalesced", 1.0)
+            except FlightAborted:
+                flight = None  # the request we waited on was cancelled; do the work ourselves
+
+        # --- Miss: compress (only now), call the provider, store ---
         no_compress = get_header(request, "no-compress") == "true"
         compression_ratio = 1.0
-        compressed_messages = messages_dicts
+        limiter: ConcurrencyLimiter | None = getattr(request.app.state, "limiter", None)
+        slot_taken = False
+        try:
+            if limiter is not None:
+                limiter.acquire()  # 503 right away when saturated; the except below releases the flight
+                slot_taken = True
+            upstream_messages = messages_dicts
+            if not no_compress:
+                upstream_messages, compression_ratio = await compress_context(
+                    messages_dicts, body.model, proxy_client, settings,
+                )
+            upstream_body = body.model_copy(update={"messages": [ChatMessage(**m) for m in upstream_messages]})
+            response_data = await proxy_client.forward(upstream_body, model_override=routing.model_selected)
+            if use_cache:
+                await cache.store(fp, response_data)
+        except BaseException as exc:
+            if slot_taken:
+                limiter.release()
+                slot_taken = False
+            if flight is not None:  # followers get the same error; a cancelled leader releases them to retry
+                flight.finish(error=exc if isinstance(exc, Exception) else None)
+            raise
+        if slot_taken:
+            limiter.release()
+        if flight is not None:
+            flight.finish(response=response_data)
 
-        if not no_compress:
-            compressed_messages, compression_ratio = await compress_context(
-                messages_dicts,
-                body.model,
-                proxy_client,
-                request.app.state.settings,
-            )
-            # Update body.messages so forward() sends compressed messages upstream
-            body.messages = [
-                body.messages[0].__class__(**m) for m in compressed_messages
-            ]
-
-        # --- Semantic cache lookup (use adaptive threshold) ---
-        active_threshold = get_active_threshold(settings, threshold_manager)
-        cache_result = await cache.lookup(body.model, compressed_messages, threshold=active_threshold)
-
-        if cache_result.hit:
-            # --- Telemetry: cache hit ---
-            request.state.cache_hit = True
-            request.state.similarity_score = cache_result.similarity_score
-            request.state.prompt_tokens = 0
-            request.state.completion_tokens = 0
-            request.state.compressed = not no_compress
-            request.state.compression_ratio = compression_ratio
-
-            return JSONResponse(
-                content=cache_result.response,
-                headers={
-                    "X-Cache": "HIT",
-                    "X-Similarity": str(cache_result.similarity_score),
-                    "X-Model-Tier": routing.tier.value,
-                    "X-Model-Selected": routing.model_selected,
-                    "X-Compressed": str(not no_compress),
-                    "X-Compression-Ratio": str(compression_ratio),
-                },
-            )
-
-        # --- Cache miss: forward upstream with routed model ---
-        response_data = await proxy_client.forward(body, model_override=routing.model_selected)
-
-        # Store in cache
-        await cache.store(body.model, compressed_messages, response_data)
-
-        # --- Telemetry: cache miss ---
         usage = response_data.get("usage") or {}
         request.state.cache_hit = False
         request.state.similarity_score = None
         request.state.prompt_tokens = usage.get("prompt_tokens", 0)
         request.state.completion_tokens = usage.get("completion_tokens", 0)
-        request.state.compressed = not no_compress
+        request.state.compressed = compression_ratio != 1.0
         request.state.compression_ratio = compression_ratio
 
-        return JSONResponse(
-            content=response_data,
-            headers={
-                "X-Cache": "MISS",
-                "X-Model-Tier": routing.tier.value,
-                "X-Model-Selected": routing.model_selected,
-                "X-Compressed": str(not no_compress),
-                "X-Compression-Ratio": str(compression_ratio),
-            },
-        )
+        headers = {
+            "X-Cache": cache_header,
+            "X-Model-Tier": routing.tier.value,
+            "X-Model-Selected": routing.model_selected,
+            "X-Compressed": str(compression_ratio != 1.0),
+            "X-Compression-Ratio": str(compression_ratio),
+        }
+        if bypass_reason:
+            headers["X-Cache-Reason"] = bypass_reason
+        return JSONResponse(content=response_data, headers=headers)
 
     except UpstreamError as exc:
-        logger.warning("upstream.error", status_code=exc.status_code, detail=exc.detail)
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={
-                "error": {
-                    "message": exc.detail,
-                    "type": "upstream_error",
-                    "code": str(exc.status_code),
-                }
-            },
+        logger.warning(
+            "upstream.error", request_id=getattr(request.state, "request_id", None),
+            status_code=exc.status_code, detail=redact_secrets(exc.detail)[:300],
         )
+        raise from_upstream(exc.status_code, exc.detail) from exc
+
+
+def _enforce_model_policy(settings: Settings, requested: str, override: str | None) -> None:
+    """Reject caller-chosen models outside ALLOWED_MODELS (when set).
+
+    Applies to the requested model and to the override header. The routing alias and the
+    operator-configured tier models are always allowed. This bounds which models a caller
+    can spend money on; per-key limits come with the access-control phase.
+    """
+    allowed = settings.allowed_model_list
+    if not allowed:
+        return
+    from app.router import ROUTING_ALIAS
+
+    for name, param in ((override, "X-NightJar-Model-Override"), (requested, "model")):
+        if name and name != ROUTING_ALIAS and name not in allowed:
+            raise NightJarError(
+                403, f"Model {name!r} is not allowed on this gateway.",
+                type="permission_error", code="model_not_allowed", param=param,
+            )
+
+
+def _cache_hit_response(request: Request, routing, response: dict, tier: str | None, similarity: float) -> JSONResponse:
+    """Serve a cached (or coalesced) response and record it for telemetry.
+
+    Token counts come from the stored response so that cache savings are computed from real
+    numbers (the pre-2.0 code recorded zero tokens on a hit, which made savings always $0).
+    """
+    usage = response.get("usage") or {}
+    request.state.cache_hit = True
+    request.state.similarity_score = similarity
+    request.state.prompt_tokens = usage.get("prompt_tokens", 0)
+    request.state.completion_tokens = usage.get("completion_tokens", 0)
+    request.state.compressed = False
+    request.state.compression_ratio = 1.0
+    return JSONResponse(
+        content=response,
+        headers={
+            "X-Cache": "HIT",
+            "X-Cache-Tier": tier or "exact",
+            "X-Similarity": f"{similarity:.4f}",
+            "X-Model-Tier": routing.tier.value,
+            "X-Model-Selected": routing.model_selected,
+        },
+    )
+
+
+async def _stream_response(
+    proxy_client: ProxyClient, body: ChatCompletionRequest, routing, limiter: ConcurrencyLimiter | None = None,
+) -> StreamingResponse:
+    """Start the upstream stream, then hand back an SSE response.
+
+    The first chunk is awaited *before* the response is created. Failures that happen while
+    connecting (bad key, unknown model, rate limit, cooldown) therefore still produce a real
+    HTTP error status. Once bytes are on the wire the status can't change, so a later failure
+    is sent in-band as an ``error`` event, which the OpenAI SDKs raise as an exception.
+    """
+    if limiter is not None:
+        limiter.acquire()  # held until the stream ends; released in events() or on a connect failure
+    stream = proxy_client.forward_stream(body, model_override=routing.model_selected)
+    try:
+        first = await stream.__anext__()
+    except StopAsyncIteration:
+        first = None
+    except UpstreamError as exc:
+        if limiter is not None:
+            limiter.release()
+        raise from_upstream(exc.status_code, exc.detail) from exc
+    except BaseException:
+        if limiter is not None:
+            limiter.release()
+        raise
+
+    async def events() -> AsyncGenerator[str, None]:
+        try:
+            if first is not None:
+                yield first
+            async for chunk in stream:
+                yield chunk
+        except UpstreamError as exc:
+            yield sse_error_event(from_upstream(exc.status_code, exc.detail))
+        except Exception as exc:  # noqa: BLE001 - nothing else can be done once streaming started
+            logger.error("stream.interrupted", reason=redact_secrets(str(exc))[:300])
+            yield sse_error_event(NightJarError(
+                502, "The upstream stream was interrupted.", type="upstream_error", code="stream_interrupted",
+            ))
+        finally:
+            try:
+                aclose = getattr(stream, "aclose", None)
+                if aclose is not None:
+                    await aclose()
+            finally:
+                if limiter is not None:
+                    limiter.release()
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "X-Model-Tier": routing.tier.value,
+            "X-Model-Selected": routing.model_selected,
+        },
+    )
 
 
 # ─────────────────── Telemetry Endpoints ─────────────────────────────────
 
 
 @app.get("/v1/telemetry", dependencies=[Depends(require_api_key)])
-async def get_telemetry(limit: int = 50, offset: int = 0):
+async def get_telemetry(limit: int = Query(default=50, ge=1, le=500), offset: int = Query(default=0, ge=0)):
     return {"records": tel.get_records(limit, offset), "limit": limit, "offset": offset}
 
 
@@ -321,31 +435,22 @@ async def get_telemetry_summary():
     return tel.get_summary()
 
 
-# ────────────────── Adaptive Threshold Endpoints ─────────────────────────
+# ────────────────── Removed: adaptive threshold ──────────────────────────
+# The adaptive controller raised or lowered the similarity threshold from the observed hit
+# rate, which rewards admitting wrong answers (docs/TECHNICAL_AUDIT.md, C-3). It is gone; these
+# routes answer 410 for one release so old callers get an explanation instead of a 404.
+
+_REMOVED_MESSAGE = (
+    "The adaptive similarity threshold was removed in NightJar 2.0. Set SIMILARITY_THRESHOLD "
+    "(used only when SEMANTIC_CACHE=true) or calibrate offline with benchmarks/cache_eval.py."
+)
 
 
-@app.get("/v1/threshold", dependencies=[Depends(require_api_key)])
-async def get_threshold(request: Request):
-    """Return the current adaptive threshold info."""
-    settings: Settings = request.app.state.settings
-    manager: ThresholdManager = request.app.state.threshold_manager
-    return manager.get_info(settings)
-
-
-@app.get("/v1/threshold/history", dependencies=[Depends(require_api_key)])
-async def get_threshold_history(request: Request, limit: int = Query(default=20, ge=1, le=200)):
-    """Return recent adaptive-threshold evaluations, newest first."""
-    manager: ThresholdManager = request.app.state.threshold_manager
-    return {"records": manager.get_history(limit)}
-
-
-@app.post("/v1/threshold/evaluate", dependencies=[Depends(require_api_key)])
-async def evaluate_threshold(request: Request):
-    """Manually trigger an adaptive threshold evaluation."""
-    settings: Settings = request.app.state.settings
-    manager: ThresholdManager = request.app.state.threshold_manager
-    result = manager.evaluate(settings)
-    return result
+@app.api_route("/v1/threshold", methods=["GET"], dependencies=[Depends(require_api_key)])
+@app.api_route("/v1/threshold/history", methods=["GET"], dependencies=[Depends(require_api_key)])
+@app.api_route("/v1/threshold/evaluate", methods=["POST"], dependencies=[Depends(require_api_key)])
+async def threshold_removed():
+    raise NightJarError(410, _REMOVED_MESSAGE, type="invalid_request_error", code="endpoint_removed")
 
 
 # ─────────────────── Cache Invalidation Endpoints ────────────────────────
@@ -355,17 +460,16 @@ async def evaluate_threshold(request: Request):
 async def cache_stats(request: Request):
     """Return cache statistics."""
     settings: Settings = request.app.state.settings
-    cache: SemanticCache = request.app.state.cache
-    threshold_manager: ThresholdManager | None = getattr(request.app.state, "threshold_manager", None)
+    cache: ResponseCache = request.app.state.cache
     stats = await cache.stats()
-    stats["similarity_threshold"] = get_active_threshold(settings, threshold_manager)
+    stats["similarity_threshold"] = settings.similarity_threshold
     return stats
 
 
 @app.delete("/v1/cache", dependencies=[Depends(require_api_key)])
 async def flush_cache(request: Request):
     """Flush the entire semantic cache."""
-    cache: SemanticCache = request.app.state.cache
+    cache: ResponseCache = request.app.state.cache
     result = await cache.flush()
     return {"status": "ok", **result}
 
@@ -373,6 +477,6 @@ async def flush_cache(request: Request):
 @app.delete("/v1/cache/{key}", dependencies=[Depends(require_api_key)])
 async def invalidate_cache_key(key: str, request: Request):
     """Invalidate a specific cache entry by key."""
-    cache: SemanticCache = request.app.state.cache
+    cache: ResponseCache = request.app.state.cache
     removed = await cache.invalidate(key)
     return {"status": "ok", "key": key, "removed": removed}

@@ -21,12 +21,14 @@ rules:
       - "where is"
       - "how old"
 
-  # Complex queries — route to more capable models
+  # Complex queries — route to more capable models.
+  # Complex keywords match from the start of a word (prefix), so stems work:
+  # "optimiz" matches optimize/optimizing. Simple keywords match whole words only.
   complex:
     min_tokens: 500
     keywords:
-      - "analyze"
-      - "compare"
+      - "analy"        # analyze, analysis, analytics
+      - "compar"       # compare, comparison
       - "explain in detail"
       - "write a comprehensive"
       - "debug"
@@ -41,10 +43,10 @@ rules:
       - "trade-offs"
       - "design pattern"
       - "algorithm"
-      - "optimize"
+      - "optimiz"      # optimize, optimizing, optimization
       - "performance"
       - "security"
-      - "vulnerability"
+      - "vulnerab"     # vulnerability, vulnerable
 
 # Model tier mappings by provider
 # NOTE: These are fallback defaults. Set SIMPLE_MODEL / COMPLEX_MODEL in your

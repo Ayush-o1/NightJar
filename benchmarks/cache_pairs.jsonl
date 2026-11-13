@@ -1,0 +1,71 @@
+{"a": "What is the capital of France?", "b": "Tell me the capital city of France", "same": true, "category": "paraphrase"}
+{"a": "How do I reset my password?", "b": "How can I reset my password?", "same": true, "category": "paraphrase"}
+{"a": "How do I reset my password?", "b": "What's the way to reset my password?", "same": true, "category": "paraphrase"}
+{"a": "What is the speed of light?", "b": "How fast does light travel?", "same": true, "category": "paraphrase"}
+{"a": "Explain what a hash table is", "b": "Can you explain hash tables?", "same": true, "category": "paraphrase"}
+{"a": "What does HTTP stand for?", "b": "What is HTTP an acronym for?", "same": true, "category": "paraphrase"}
+{"a": "How do I create a Python virtual environment?", "b": "How can I make a virtual environment in Python?", "same": true, "category": "paraphrase"}
+{"a": "Give me a recipe for pancakes", "b": "Can you give me a pancake recipe?", "same": true, "category": "paraphrase"}
+{"a": "What is photosynthesis?", "b": "Explain photosynthesis", "same": true, "category": "paraphrase"}
+{"a": "How many days are in a leap year?", "b": "How many days does a leap year have?", "same": true, "category": "paraphrase"}
+{"a": "Summarize the plot of Hamlet", "b": "Give me a summary of Hamlet's plot", "same": true, "category": "paraphrase"}
+{"a": "What is the difference between TCP and UDP?", "b": "How do TCP and UDP differ?", "same": true, "category": "paraphrase"}
+{"a": "How do I undo my last git commit?", "b": "What's the way to undo the last git commit?", "same": true, "category": "paraphrase"}
+{"a": "Define recursion", "b": "What is recursion?", "same": true, "category": "paraphrase"}
+{"a": "Why is the sky blue?", "b": "What makes the sky look blue?", "same": true, "category": "paraphrase"}
+{"a": "What is a REST API?", "b": "Explain what a REST API is", "same": true, "category": "paraphrase"}
+{"a": "How do I center a div in CSS?", "b": "How can I center a div with CSS?", "same": true, "category": "paraphrase"}
+{"a": "What is the boiling point of water?", "b": "At what temperature does water boil?", "same": true, "category": "paraphrase"}
+{"a": "Write a haiku about autumn", "b": "Compose a haiku on autumn", "same": true, "category": "paraphrase"}
+{"a": "What is machine learning?", "b": "Explain machine learning", "same": true, "category": "paraphrase"}
+{"a": "How do I check my disk space on Linux?", "b": "How can I see free disk space on Linux?", "same": true, "category": "paraphrase"}
+{"a": "What causes inflation?", "b": "What are the causes of inflation?", "same": true, "category": "paraphrase"}
+{"a": "Who wrote Pride and Prejudice?", "b": "Who is the author of Pride and Prejudice?", "same": true, "category": "paraphrase"}
+{"a": "How do I install Node.js?", "b": "What's the way to install Node.js?", "same": true, "category": "paraphrase"}
+{"a": "Is Python interpreted or compiled?", "b": "Is Python an interpreted or a compiled language?", "same": true, "category": "paraphrase"}
+{"a": "What is a binary search?", "b": "Explain binary search", "same": true, "category": "paraphrase"}
+{"a": "How long does it take to boil an egg?", "b": "How many minutes should I boil an egg?", "same": true, "category": "paraphrase"}
+{"a": "What is the meaning of idempotent?", "b": "What does idempotent mean?", "same": true, "category": "paraphrase"}
+{"a": "Tell me a joke about cats", "b": "Tell me a joke about cats.", "same": true, "category": "paraphrase"}
+{"a": "what is dns", "b": "What is DNS?", "same": true, "category": "paraphrase"}
+{"a": "What was the revenue in 2022?", "b": "What was the revenue in 2023?", "same": false, "category": "number_change"}
+{"a": "Convert 10 miles to km", "b": "Convert 100 miles to km", "same": false, "category": "number_change"}
+{"a": "Give me 5 ideas for a birthday party", "b": "Give me 10 ideas for a birthday party", "same": false, "category": "number_change"}
+{"a": "What is 15% of 200?", "b": "What is 25% of 200?", "same": false, "category": "number_change"}
+{"a": "Summarize chapter 3 of the book", "b": "Summarize chapter 4 of the book", "same": false, "category": "number_change"}
+{"a": "Write a function to return the first 3 primes", "b": "Write a function to return the first 30 primes", "same": false, "category": "number_change"}
+{"a": "How do I run Python 3.9 in Docker?", "b": "How do I run Python 3.12 in Docker?", "same": false, "category": "number_change"}
+{"a": "What happened in 1989?", "b": "What happened in 1991?", "same": false, "category": "number_change"}
+{"a": "What is the capital of France?", "b": "What is the capital of Germany?", "same": false, "category": "proper_noun_swap"}
+{"a": "Translate 'good morning' to French", "b": "Translate 'good morning' to Spanish", "same": false, "category": "proper_noun_swap"}
+{"a": "How far is Paris from London?", "b": "How far is Paris from Berlin?", "same": false, "category": "proper_noun_swap"}
+{"a": "Who won the World Cup for Brazil?", "b": "Who won the World Cup for Argentina?", "same": false, "category": "proper_noun_swap"}
+{"a": "How do I deploy to AWS?", "b": "How do I deploy to Azure?", "same": false, "category": "proper_noun_swap"}
+{"a": "Compare Python with Java", "b": "Compare Python with Rust", "same": false, "category": "proper_noun_swap"}
+{"a": "What is the population of Tokyo?", "b": "What is the population of Mumbai?", "same": false, "category": "proper_noun_swap"}
+{"a": "Write a poem about Monday", "b": "Write a poem about Friday", "same": false, "category": "proper_noun_swap"}
+{"a": "Is it safe to take this with alcohol?", "b": "Is it not safe to take this with alcohol?", "same": false, "category": "negation"}
+{"a": "List foods that contain gluten", "b": "List foods that do not contain gluten", "same": false, "category": "negation"}
+{"a": "Should I use a loop here?", "b": "Should I not use a loop here?", "same": false, "category": "negation"}
+{"a": "Which countries are in the EU?", "b": "Which countries are not in the EU?", "same": false, "category": "negation"}
+{"a": "Does this code leak memory?", "b": "Does this code never leak memory?", "same": false, "category": "negation"}
+{"a": "Convert 10 miles to kilometers", "b": "Convert 10 kilometers to miles", "same": false, "category": "lowercase_swap"}
+{"a": "Write a function that sorts a list ascending", "b": "Write a function that sorts a list descending", "same": false, "category": "lowercase_swap"}
+{"a": "Is it safe to take ibuprofen with alcohol?", "b": "Is it safe to take acetaminophen with alcohol?", "same": false, "category": "lowercase_swap"}
+{"a": "How do I increase the font size?", "b": "How do I decrease the font size?", "same": false, "category": "lowercase_swap"}
+{"a": "Explain the benefits of remote work", "b": "Explain the drawbacks of remote work", "same": false, "category": "lowercase_swap"}
+{"a": "How do I enable dark mode?", "b": "How do I disable dark mode?", "same": false, "category": "lowercase_swap"}
+{"a": "What is the difference between a list and a tuple?", "b": "What is the difference between a list and a set?", "same": false, "category": "lowercase_swap"}
+{"a": "Give me a recipe for baking chicken", "b": "Give me a recipe for baking salmon", "same": false, "category": "lowercase_swap"}
+{"a": "How do I encrypt a file?", "b": "How do I decrypt a file?", "same": false, "category": "lowercase_swap"}
+{"a": "What is the cheapest way to travel by train?", "b": "What is the fastest way to travel by train?", "same": false, "category": "lowercase_swap"}
+{"a": "Write a poem about winter", "b": "Write a poem about summer", "same": false, "category": "lowercase_swap"}
+{"a": "How do I merge two branches?", "b": "How do I delete two branches?", "same": false, "category": "lowercase_swap"}
+{"a": "How do I reset my password?", "b": "How do I reset my username?", "same": false, "category": "related_intent"}
+{"a": "How do I cancel my subscription?", "b": "How do I upgrade my subscription?", "same": false, "category": "related_intent"}
+{"a": "What is the capital of France?", "b": "What is the population of France?", "same": false, "category": "related_intent"}
+{"a": "How do I create a table in SQL?", "b": "How do I drop a table in SQL?", "same": false, "category": "related_intent"}
+{"a": "What are the symptoms of flu?", "b": "What are the treatments for flu?", "same": false, "category": "related_intent"}
+{"a": "Explain how a mutex works", "b": "Explain how a semaphore works", "same": false, "category": "related_intent"}
+{"a": "What is a stack?", "b": "What is a queue?", "same": false, "category": "related_intent"}
+{"a": "How do I read a file in Python?", "b": "How do I write a file in Python?", "same": false, "category": "related_intent"}

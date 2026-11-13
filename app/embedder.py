@@ -12,6 +12,8 @@ import hashlib
 import numpy as np
 import structlog
 
+from app.tokens import content_to_text
+
 logger = structlog.get_logger()
 
 
@@ -66,7 +68,7 @@ class Embedder:
         parts = []
         for msg in messages:
             role = msg.get("role", "")
-            content = msg.get("content", "") or ""
+            content = content_to_text(msg.get("content"))
             if content:
                 parts.append(f"{role}: {content}")
         return "\n".join(parts)

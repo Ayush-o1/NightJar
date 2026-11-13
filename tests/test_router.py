@@ -25,7 +25,7 @@ class TestModelRouter:
     @pytest.fixture
     def router(self) -> ModelRouter:
         """Return a real ModelRouter with the project's routing config."""
-        return ModelRouter(config_path="config/routing_rules.yaml", preferred_provider="openai")
+        return ModelRouter(config_path="config/routing_rules.yaml", preferred_provider="openai", routing_mode="always")
 
     def test_simple_greeting(self, router):
         """Greetings should route to SIMPLE."""
@@ -79,7 +79,9 @@ class TestModelRouter:
 
     def test_anthropic_provider(self):
         """Anthropic provider maps to claude models."""
-        router = ModelRouter(config_path="config/routing_rules.yaml", preferred_provider="anthropic")
+        router = ModelRouter(
+            config_path="config/routing_rules.yaml", preferred_provider="anthropic", routing_mode="always",
+        )
         result = router.route(
             "claude-3-haiku",
             [{"role": "user", "content": "Analyze this complex system architecture."}],
@@ -130,7 +132,7 @@ class TestLabeledPromptAccuracy:
 
     @pytest.fixture
     def router(self) -> ModelRouter:
-        return ModelRouter(config_path="config/routing_rules.yaml", preferred_provider="openai")
+        return ModelRouter(config_path="config/routing_rules.yaml", preferred_provider="openai", routing_mode="always")
 
     def test_accuracy_above_85_percent(self, router, labeled_prompts):
         """Router must correctly classify ≥85% of the labeled prompts."""

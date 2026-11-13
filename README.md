@@ -20,9 +20,9 @@ A proxy is a better place for it: the app changes one URL, and caching, routing,
 
 ## What it does
 
-1. **Model routing** — classifies each prompt as `simple` or `complex` from token count and keyword rules, then picks the matching model tier (e.g. `gpt-3.5-turbo` vs `gpt-4o`). Rules live in `config/routing_rules.yaml`. Measured at ~88% accuracy against a labeled 1,000-prompt set.
+1. **Model routing (opt-in)** — classifies each prompt as `simple` or `complex` from token count and keyword rules (`config/routing_rules.yaml`) and can switch to the matching model tier (e.g. `gpt-3.5-turbo` vs `gpt-4o`). By default NightJar uses the model you asked for and only routes when you request the alias `nightjar/auto` (or set `ROUTING_MODE=always`). The tier it *would* have chosen is recorded either way, so you can see the effect before enabling it. On the repo's 1,000-prompt labeled set the classifier agrees with the labels 92.8% of the time; that set is short, keyword-aligned prompts, so it shows the rules match their labels, not that cheaper models answer well. Details: [docs/BASELINE.md](docs/BASELINE.md).
 
-2. **Semantic caching** — prompts are embedded locally with `all-MiniLM-L6-v2` and matched against a FAISS index. Above the similarity threshold (default 0.92), the cached response comes back from Redis with no upstream call. The threshold auto-tunes itself from observed hit rates.
+2. **Response caching** — an **exact tier** (always on) returns the stored answer when the same model, parameters and messages were already answered; identical requests arriving together share one provider call. An optional **semantic tier** (`SEMANTIC_CACHE=true`, off by default) also serves near-duplicate prompts from the same conversation context, using local embeddings (`all-MiniLM-L6-v2`) and lexical guards. Semantic matching can return a wrong answer: on the repo's labeled pairs it served 3 of 41 should-not-match pairs even with the guards (about 7%, plausible range roughly 2–20%), because the embedding model scores some opposite-meaning prompts higher than true paraphrases. Details and method: [docs/benchmarks/CACHE_CORRECTNESS.md](docs/benchmarks/CACHE_CORRECTNESS.md).
 
 3. **Context compression** — once a conversation passes a token threshold and a minimum turn count, older turns get summarized so the upstream request stays small.
 
@@ -40,19 +40,19 @@ The embedding model and the classifier both run locally on CPU — no third-part
 POST /v1/chat/completions
      │
      ▼
-  Route ──── token count + keywords → simple | complex
+  Limits + auth ──── body size, text budget, validation, API key
      │
      ▼
-  Compress ──── summarize old turns if the conversation is long
+  Route ──── keep requested model (default) or pick a tier for "nightjar/auto"
      │
      ▼
-  Cache lookup ──── embed → FAISS → Redis
+  Cache ──── exact lookup → (opt-in) guarded semantic lookup → single-flight
      │
- HIT ┴ MISS ──→ LiteLLM Router ──→ Provider API
-     │              │
-     │          Cache store
-     └──────┬───────┘
-            ▼
+ HIT ┴ MISS ──→ Compress (long chats) ──→ LiteLLM Router ──→ Provider API
+     │                                         │
+     │                                     Cache store
+     └──────────────┬──────────────────────────┘
+                    ▼
      Telemetry write (SQLite) → response + diagnostic headers
 ```
 
@@ -69,7 +69,7 @@ Full detail — components, data model, concurrency, dashboard design, threat mo
 | Web framework | FastAPI (Python 3.11) + Uvicorn |
 | Provider gateway | LiteLLM Router |
 | Embeddings | `sentence-transformers/all-MiniLM-L6-v2` (384-dim, CPU) |
-| Vector search | FAISS `IndexFlatIP` |
+| Vector search | numpy brute-force cosine, scoped per cache partition (ADR-009) |
 | Cache store | Redis 7 |
 | Telemetry DB | SQLite (WAL mode, raw `sqlite3`) |
 | Config | Pydantic Settings + `.env` |
@@ -123,9 +123,9 @@ response = client.chat.completions.create(
 )
 ```
 
-Responses carry diagnostic headers: `X-Cache` (HIT/MISS), `X-Similarity`, `X-Model-Tier`, `X-Model-Selected`, `X-Compressed`, `X-Compression-Ratio`.
+Responses carry diagnostic headers: `X-Cache` (HIT/MISS/BYPASS), `X-Cache-Tier` (exact/semantic/coalesced), `X-Cache-Reason` (why a request bypassed the cache), `X-Similarity`, `X-Model-Tier`, `X-Model-Selected`, `X-Compressed`, `X-Compression-Ratio`.
 
-Two request headers are recognized: `X-NightJar-Model-Override` (force a model, bypass routing) and `X-NightJar-No-Compress: true`.
+Request headers: `X-NightJar-Model-Override` (force a specific model), `X-NightJar-No-Compress: true`, and `X-Request-ID` (your own trace id, echoed back). Every response carries `X-Request-ID`. The old `X-ContextForge-*` header names still work but are deprecated.
 
 ---
 
@@ -139,13 +139,18 @@ Every variable is documented inline in [`.env.example`](.env.example). The ones 
 | `SIMPLE_MODEL` | `gpt-3.5-turbo` | Model for the simple tier |
 | `COMPLEX_MODEL` | `gpt-4o` | Model for the complex tier |
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection string |
-| `SIMILARITY_THRESHOLD` | `0.92` | Cosine similarity required for a cache hit |
+| `SIMILARITY_THRESHOLD` | `0.92` | Cosine similarity required for a semantic hit (only with `SEMANTIC_CACHE=true`) |
 | `CACHE_TTL_SECONDS` | `86400` | Cached response lifetime |
 | `COMPRESS_THRESHOLD` | `2000` | Token count that triggers compression |
 | `COMPRESS_MIN_TURNS` | `6` | Minimum turns before compression applies |
-| `ADAPTIVE_THRESHOLD_ENABLED` | `true` | Auto-tune the similarity threshold |
+| `SEMANTIC_CACHE` | `false` | Enable the semantic tier (see correctness report) |
+| `CACHE_MAX_TEMPERATURE` | `1.0` | Requests above this temperature are never cached |
 | `NIGHTJAR_API_KEYS` | `""` | Comma-separated bearer tokens. Empty = auth off (local-dev default) |
 | `CORS_ALLOW_ORIGINS` | `*` | Allowed origins; credentialed CORS is never enabled |
+| `ROUTING_MODE` | `explicit` | `explicit`: honour the requested model, route only for `nightjar/auto`; `always`: route every request; `off`: never switch |
+| `ALLOWED_MODELS` | `""` | Comma-separated models callers may request/override to. Empty = any |
+| `MAX_REQUEST_BYTES` | `8388608` | Request body limit (`413` above it) |
+| `MAX_PROMPT_CHARS` | `2000000` | Text-length limit across all messages (`400` above it) |
 | `TEST_MODE` | `false` | Force the cheapest model for every request |
 
 ---
@@ -158,10 +163,8 @@ Every variable is documented inline in [`.env.example`](.env.example). The ones 
 | `GET` | `/health` | Liveness + Redis reachability |
 | `GET` | `/v1/telemetry` | Paginated request records |
 | `GET` | `/v1/telemetry/summary` | Aggregated stats |
-| `GET` | `/v1/threshold` | Current adaptive threshold |
-| `GET` | `/v1/threshold/history` | Past threshold evaluations |
-| `POST` | `/v1/threshold/evaluate` | Trigger a threshold re-evaluation |
-| `GET` | `/v1/cache/stats` | FAISS vector count, Redis keys, active threshold |
+| `GET/POST` | `/v1/threshold*` | Removed in 2.0 (answers `410`) |
+| `GET` | `/v1/cache/stats` | Vector count, Redis keys, hit/miss counters |
 | `DELETE` | `/v1/cache` | Flush the cache |
 | `DELETE` | `/v1/cache/{key}` | Invalidate one entry |
 | `GET` | `/admin/usage` | Spend/token summary (filterable) |
@@ -178,7 +181,7 @@ Schemas and examples: [docs/API.md](docs/API.md).
 
 Open `http://localhost:8000/dashboard/` while the backend is running.
 
-Shows the request log, cache hit rate, model and tier distribution, latency and cost trends, routing-reason breakdown, and the adaptive threshold — all computed from real `/v1/*` responses. If it can't reach a backend it falls back to a demo dataset and says so in the header badge.
+Shows the request log, cache hit rate, model and tier distribution, latency and cost trends, routing-reason breakdown, — all computed from real `/v1/*` responses. If it can't reach a backend it falls back to a demo dataset and says so in the header badge.
 
 It's plain HTML, CSS and JavaScript with Chart.js — no build step, no framework. Tables collapse into stacked records on narrow screens, colour is only used where it means something (a cache hit saved a call; a slow request needs a look), and every screen has a real empty state instead of a blank panel.
 
@@ -191,7 +194,7 @@ uv run ruff check app/ tests/ benchmarks/
 PYTHONPATH=. uv run pytest tests/     # mocked — no network, no Redis needed
 ```
 
-This is exactly what CI runs. The suite covers the router classifier (including accuracy against the labeled dataset), cache hit/miss and Redis-outage degradation, compression triggers and fallback, telemetry read/write, adaptive threshold bounds, auth on/off, failover, tool-call handling, and the proxy's error propagation.
+This is exactly what CI runs. The suite covers the router classifier (including accuracy against the labeled dataset), cache correctness against a real Redis (exact and semantic tiers, single-flight, Redis and embedder outages), compression triggers and fallback, telemetry read/write, auth on/off, failover, tool-call handling, and the proxy's error propagation.
 
 **Live E2E tests** (`tests/test_e2e.py`) are marked `e2e` and excluded by default — they hit a real provider and cost real money:
 
@@ -213,7 +216,7 @@ python benchmarks/run_benchmark.py --dry-run   # no server required
 
 **Redis is optional at runtime.** Cache reads and writes catch connection errors and degrade to a miss, so a Redis outage makes the gateway slower, not broken. `/health` reports Redis separately from process liveness.
 
-**FAISS writes are locked.** FAISS index objects aren't thread-safe and Uvicorn handles requests concurrently, so `VectorStore` guards mutations with a `threading.Lock`. The index persists to `./data/faiss.index` on shutdown alongside an id-map file; the two are always written and deleted together to avoid an orphaned index.
+**The vector index is snapshotted atomically.** All index operations take one lock; a background task writes `./data/vectors.npz` (temp file + rename) when it changed and at shutdown, so a crash can't leave a torn file. Expired entries are dropped on a timer and on load.
 
 **Streaming skips the cache.** You can't match a token stream against a cache before it exists, and buffering it to compress would defeat streaming. Streamed requests are still routed and still logged.
 
@@ -223,29 +226,23 @@ python benchmarks/run_benchmark.py --dry-run   # no server required
 
 ## Troubleshooting
 
-**`Fatal Python error: Aborted` on macOS (Apple Silicon)** — `faiss-cpu` and `torch` each bundle their own OpenMP runtime and abort when both load. Local-dev only; Linux/Docker are unaffected:
-
-```bash
-export KMP_DUPLICATE_LIB_OK=TRUE
-```
-
 **Startup hangs ~15s with no internet** — sentence-transformers pings Hugging Face even when the model is cached. Skip it with `HF_HUB_OFFLINE=1`.
 
 **`no such table` or missing telemetry columns** — the schema is created at startup, so an old `./data/telemetry.db` from before a schema change won't have new columns. Delete it and restart; it's local runtime data, not source.
 
 **`ModuleNotFoundError: No module named 'app'`** — run pytest with `PYTHONPATH=.`.
 
-**Cache lookups behaving oddly** — delete `data/faiss.index` and `data/faiss.index.idmap` together and restart for a clean index.
+**Cache lookups behaving oddly** — `DELETE /v1/cache` flushes Redis and the vector index; deleting `data/vectors.npz` while stopped also resets the index. Old `data/faiss.index*` files from 1.x are no longer used and can be deleted.
 
 ---
 
 ## Known limitations
 
-- **Single instance.** The FAISS index and SQLite database are local files, so the cache and telemetry don't span replicas. Scaling out means a shared vector store and Postgres — upgrade paths are written up in [docs/DECISIONS.md](docs/DECISIONS.md) (ADR-001, ADR-003).
-- **Routing accuracy is measured offline only.** Live traffic has no ground-truth labels, so the ~88% figure comes from the labeled benchmark set, not production.
+- **Single instance.** The vector index and SQLite database are local files, and single-flight is in-process, so those don't span replicas (cached responses in Redis do). Scaling out means a shared vector store and Postgres; see ADR-003 and ADR-009 in [docs/DECISIONS.md](docs/DECISIONS.md).
+- **Routing quality is not measured.** The 92.8% figure is agreement with hand-written labels on short prompts, not evidence that a cheaper model answered adequately. Live traffic has no ground truth.
 - **Compression costs a call.** Summarizing older turns is itself an LLM request, so it only pays off on genuinely long conversations — hence the token *and* turn-count gates.
 - **Costs in `telemetry` are estimates** from a static per-model table that goes stale as providers change pricing. `request_log` has the real numbers.
-- **One global similarity threshold**, not per-model or per-tenant.
+- **One similarity threshold** for the semantic tier, not per-model or per-tenant, and the tier cannot be made fully safe (see the correctness report).
 - **No rate limiting or per-key quotas.** The auth layer is a flat token list, not an identity system.
 
 ---

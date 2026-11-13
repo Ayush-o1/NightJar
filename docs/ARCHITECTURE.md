@@ -1,5 +1,7 @@
 # Architecture
 
+> **Partly outdated.** This file predates the 2.0 modernization and still describes FAISS, the adaptive threshold and the old pipeline order. The current design is in [architecture/SYSTEM_DESIGN.md](architecture/SYSTEM_DESIGN.md) and [architecture/REQUEST_LIFECYCLE.md](architecture/REQUEST_LIFECYCLE.md); decisions are in [DECISIONS.md](DECISIONS.md) (ADR-007 to ADR-009). It is rewritten in the final documentation phase.
+
 How NightJar works internally. For endpoint schemas see [API.md](API.md); for why things were built this way see [DECISIONS.md](DECISIONS.md).
 
 ---

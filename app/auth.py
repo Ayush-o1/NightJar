@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import hmac
 
-from fastapi import HTTPException, Request
+from fastapi import Request
 
 from app.config import Settings
+from app.errors import authentication_error
 
 
 def _matches_any(token: str, valid_keys: list[str]) -> bool:
@@ -38,8 +39,4 @@ async def require_api_key(request: Request) -> None:
     header = request.headers.get("authorization", "")
     scheme, _, token = header.partition(" ")
     if scheme.lower() != "bearer" or not token or not _matches_any(token, settings.api_keys):
-        raise HTTPException(
-            status_code=401,
-            detail="Missing or invalid API key. Provide 'Authorization: Bearer <token>'.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise authentication_error()

@@ -1,211 +1,307 @@
-"""Semantic cache orchestrator.
+"""Response cache: an exact tier that is always safe, and an opt-in semantic tier behind guards.
 
-Coordinates FAISS vector similarity search with Redis key-value storage
-to provide semantic caching for LLM responses.
+Tier 1, exact (always on): the key is a hash of the full request fingerprint
+(app/fingerprint.py): model, generation parameters, every message. A hit means
+the request is byte-for-byte the same question to the same model with the same
+settings.
 
-Flow:
-  1. Embed incoming prompt → vector
-  2. Search FAISS for similar vectors above threshold
-  3. On hit: fetch cached response from Redis → return
-  4. On miss: forward to upstream, store response in Redis + vector in FAISS
+Tier 2, semantic (``SEMANTIC_CACHE=true``): only searches entries in the *same
+partition* (same model, parameters and conversation context; only the last user
+message differs), requires similarity >= threshold, and then rejects the hit if
+the two prompts disagree on numbers, negation, quoted text or proper nouns
+(app/guards.py). This tier can still return a wrong answer for prompts that
+differ in an ordinary lowercase word; see docs/benchmarks/CACHE_CORRECTNESS.md.
+
+Storage: response payloads live in Redis (TTL). Vectors live in an in-process
+index persisted to a local file. Redis and embedding failures degrade to a
+miss; they never fail the request.
+
+Single-flight: identical eligible requests that arrive while the first is still
+running wait for it instead of each calling the provider (in-process only).
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from dataclasses import dataclass
 
 import structlog
 from redis.asyncio import Redis
 
 from app.config import Settings
-from app.embedder import Embedder
-from app.vector_store import VectorStore
+from app.fingerprint import Fingerprint, response_is_cacheable
+from app.guards import disagreement
+from app.vector_index import VectorIndex
 
 logger = structlog.get_logger()
+
+KEY_PREFIX = "nj:v2:r:"
+MAX_EMBED_CHARS = 4000
 
 
 @dataclass
 class CacheResult:
-    """Result of a cache lookup."""
+    """Result of a cache lookup. ``tier`` is "exact" or "semantic" on a hit."""
 
     hit: bool
     response: dict | None = None
+    tier: str | None = None
     similarity_score: float = 0.0
     cache_key: str = ""
+    reason: str = ""  # why it missed, for logs and debugging
 
 
-class SemanticCache:
-    """Orchestrates semantic cache lookups and stores."""
+class FlightAborted(Exception):
+    """The request we were waiting on was cancelled; the follower should run on its own."""
 
-    def __init__(
-        self,
-        embedder: Embedder,
-        vector_store: VectorStore,
-        redis: Redis,
-        settings: Settings,
-    ) -> None:
-        self._embedder = embedder
-        self._vector_store = vector_store
+
+class Flight:
+    """Handle for one in-progress eligible request. The first caller is the leader."""
+
+    def __init__(self, cache: ResponseCache, key: str, future: asyncio.Future, leader: bool) -> None:
+        self._cache, self._key, self._future, self.leader = cache, key, future, leader
+
+    async def wait(self) -> dict:
+        """Followers: wait for the leader's response (or its exception)."""
+        return await asyncio.shield(self._future)
+
+    def finish(self, response: dict | None = None, error: BaseException | None = None) -> None:
+        """Leader: publish the outcome to followers and deregister."""
+        if not self.leader:
+            return
+        self._cache._flights.pop(self._key, None)
+        if self._future.done():
+            return
+        if error is not None:
+            self._future.set_exception(error)
+        elif response is not None:
+            self._future.set_result(response)
+        else:
+            self._future.set_exception(FlightAborted())
+
+
+class ResponseCache:
+    def __init__(self, embedder, index: VectorIndex, redis: Redis, settings: Settings) -> None:
+        self._embedder = embedder  # None when the semantic tier is off
+        self._index = index
         self._redis = redis
         self._settings = settings
+        self._flights: dict[str, asyncio.Future] = {}
+        self._maintenance: asyncio.Task | None = None
+        self.counters: dict[str, int] = {
+            "exact_hits": 0, "semantic_hits": 0, "coalesced": 0, "misses": 0,
+            "redis_errors": 0, "embed_errors": 0, "stored": 0, "not_stored": 0, "guard_rejections": 0,
+        }
 
-    async def lookup(
-        self, model: str, messages: list[dict], *, threshold: float | None = None
-    ) -> CacheResult:
-        """Look up a semantically similar cached response.
+    @property
+    def semantic_enabled(self) -> bool:
+        return bool(self._settings.semantic_cache and self._embedder is not None)
 
-        Args:
-            model: The model name for context.
-            messages: The conversation messages.
-            threshold: Optional override for the similarity threshold.
-                       Falls back to ``settings.similarity_threshold``.
+    # ── lookup ───────────────────────────────────────────────────────────
 
-        Steps:
-          1. Embed the message content
-          2. Search FAISS for nearest neighbor
-          3. If similarity >= threshold, fetch from Redis
-          4. Return CacheResult with hit/miss info
-        """
-        effective_threshold = (
-            threshold if threshold is not None else self._settings.similarity_threshold
-        )
+    async def lookup(self, fp: Fingerprint, *, threshold: float | None = None) -> CacheResult:
+        if not fp.eligible:
+            return CacheResult(hit=False, reason=f"ineligible:{fp.reason}")
+        threshold = self._settings.similarity_threshold if threshold is None else threshold
 
-        text = self._embedder.messages_to_text(messages)
-        vector = self._embedder.embed(text)
-
-        # Search for nearest neighbor
-        results = self._vector_store.search(vector, k=1)
-
-        if not results:
-            logger.debug("cache.miss", reason="empty_index")
-            return CacheResult(hit=False)
-
-        cache_key, similarity = results[0]
-
-        if similarity < effective_threshold:
-            logger.debug("cache.miss", reason="below_threshold", similarity=similarity)
-            return CacheResult(hit=False, similarity_score=similarity)
-
-        # Fetch from Redis. Redis is an optimization, not a hard dependency —
-        # if it's unreachable we degrade to a cache miss instead of failing
-        # the whole request (the upstream call still succeeds).
         try:
-            cached_data = await self._redis.get(f"cache:{cache_key}")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("cache.lookup.redis_error", cache_key=cache_key, reason=str(exc))
-            return CacheResult(hit=False, similarity_score=similarity)
+            raw = await self._redis.get(KEY_PREFIX + fp.exact_key)
+        except Exception as exc:  # noqa: BLE001 - Redis is an optimisation, not a dependency
+            self.counters["redis_errors"] += 1
+            logger.warning("cache.lookup.redis_error", reason=str(exc))
+            return CacheResult(hit=False, reason="redis_error")
+        if raw is not None:
+            payload = _decode(raw)
+            if payload is not None:
+                self.counters["exact_hits"] += 1
+                return CacheResult(True, payload["response"], "exact", 1.0, fp.exact_key)
 
-        if cached_data is None:
-            # Vector exists in FAISS but Redis entry expired (TTL)
-            logger.debug("cache.miss", reason="redis_expired", cache_key=cache_key)
-            return CacheResult(hit=False, similarity_score=similarity)
+        if self.semantic_enabled and fp.semantic_text:
+            result = await self._semantic_lookup(fp, threshold)
+            if result.hit:
+                self.counters["semantic_hits"] += 1
+                return result
+            self.counters["misses"] += 1
+            return result
 
-        response = json.loads(cached_data)
-        logger.info("cache.hit", similarity=similarity, cache_key=cache_key)
-        return CacheResult(
-            hit=True,
-            response=response,
-            similarity_score=similarity,
-            cache_key=cache_key,
-        )
+        self.counters["misses"] += 1
+        return CacheResult(hit=False, reason="no_exact_match")
 
-    async def store(self, model: str, messages: list[dict], response: dict) -> str:
-        """Store a response in the semantic cache.
-
-        Steps:
-          1. Generate content hash as cache key
-          2. Embed the message content
-          3. Store response JSON in Redis with TTL
-          4. Add vector to FAISS index
-        """
-        cache_key = self._embedder.content_hash(model, messages)
-        text = self._embedder.messages_to_text(messages)
-        vector = self._embedder.embed(text)
-
-        # Store in Redis with TTL. Best-effort: if Redis is unreachable, still
-        # index the vector — a later lookup will find it in FAISS, miss on the
-        # Redis fetch, and correctly fall back to "redis_expired" (cache miss)
-        # rather than losing the request's cost/latency savings entirely.
+    async def _semantic_lookup(self, fp: Fingerprint, threshold: float) -> CacheResult:
+        text = fp.semantic_text[:MAX_EMBED_CHARS]  # type: ignore[index]
         try:
-            await self._redis.set(
-                f"cache:{cache_key}",
-                json.dumps(response),
-                ex=self._settings.cache_ttl_seconds,
-            )
+            vector = await asyncio.to_thread(self._embedder.embed, text)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("cache.store.redis_error", cache_key=cache_key, reason=str(exc))
+            self.counters["embed_errors"] += 1
+            logger.warning("cache.lookup.embed_error", reason=str(exc))
+            return CacheResult(hit=False, reason="embed_error")
 
-        # Add to FAISS index
-        self._vector_store.add(vector, cache_key)
+        candidates = self._index.search(fp.partition, vector, k=5)
+        if not candidates:
+            return CacheResult(hit=False, reason="no_candidates_in_partition")
 
-        logger.info("cache.stored", cache_key=cache_key)
-        return cache_key
+        best = candidates[0][1]
+        reason = "below_threshold"
+        for key, score in candidates:
+            if score < threshold:
+                break
+            try:
+                raw = await self._redis.get(KEY_PREFIX + key)
+            except Exception as exc:  # noqa: BLE001
+                self.counters["redis_errors"] += 1
+                logger.warning("cache.lookup.redis_error", reason=str(exc))
+                return CacheResult(hit=False, reason="redis_error")
+            payload = _decode(raw) if raw is not None else None
+            if payload is None:
+                self._index.remove(key)  # payload expired or was evicted; drop the dangling vector
+                reason = "payload_missing"
+                continue
+            guard = disagreement(payload.get("prompt", ""), fp.semantic_text)  # type: ignore[arg-type]
+            if guard:
+                self.counters["guard_rejections"] += 1
+                logger.info("cache.semantic.guard_rejected", guard=guard, similarity=round(score, 4))
+                reason = f"guard:{guard}"
+                continue
+            return CacheResult(True, payload["response"], "semantic", score, key)
+        return CacheResult(hit=False, similarity_score=best, reason=reason)
+
+    # ── store ────────────────────────────────────────────────────────────
+
+    async def store(self, fp: Fingerprint, response: dict) -> bool:
+        """Store a response if both the request and the response are cacheable. Never raises."""
+        if not fp.eligible:
+            return False
+        ok, why = response_is_cacheable(response)
+        if not ok:
+            self.counters["not_stored"] += 1
+            logger.debug("cache.not_stored", reason=why)
+            return False
+
+        ttl = self._settings.cache_ttl_seconds
+        payload = json.dumps({
+            "response": response, "prompt": fp.semantic_text or "", "model": fp.model, "created": time.time(),
+        })
+        try:
+            await self._redis.set(KEY_PREFIX + fp.exact_key, payload, ex=ttl)
+        except Exception as exc:  # noqa: BLE001
+            self.counters["redis_errors"] += 1
+            logger.warning("cache.store.redis_error", reason=str(exc))
+            return False  # no payload, so do not index a vector that could never be served
+
+        if self.semantic_enabled and fp.semantic_text:
+            try:
+                vector = await asyncio.to_thread(self._embedder.embed, fp.semantic_text[:MAX_EMBED_CHARS])
+                self._index.add(fp.exact_key, fp.partition, vector, time.time() + ttl)
+            except Exception as exc:  # noqa: BLE001 - exact tier still works without the vector
+                self.counters["embed_errors"] += 1
+                logger.warning("cache.store.embed_error", reason=str(exc))
+        self.counters["stored"] += 1
+        return True
+
+    # ── single-flight ────────────────────────────────────────────────────
+
+    def begin_flight(self, key: str) -> Flight:
+        existing = self._flights.get(key)
+        if existing is not None:
+            self.counters["coalesced"] += 1
+            return Flight(self, key, existing, leader=False)
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        future.add_done_callback(lambda f: f.cancelled() or f.exception())  # mark exceptions "retrieved"
+        self._flights[key] = future
+        return Flight(self, key, future, leader=True)
+
+    # ── admin ────────────────────────────────────────────────────────────
 
     async def invalidate(self, key: str) -> bool:
-        """Invalidate a specific cached entry by its Redis key.
-
-        Removes the Redis entry and the corresponding FAISS vector.
-        Returns True if the key existed and was removed.
-        """
-        redis_key = f"cache:{key}"
         deleted = 0
         try:
-            deleted = await self._redis.delete(redis_key)
-        except Exception:
-            logger.warning("cache.invalidate.redis_error", cache_key=key)
-        vector_removed = self._vector_store.remove_by_key(key)
-        logger.info("cache.invalidated", cache_key=key, redis_deleted=deleted, vector_removed=vector_removed)
-        return bool(deleted) or vector_removed
+            deleted = await self._redis.delete(KEY_PREFIX + key)
+        except Exception as exc:  # noqa: BLE001
+            self.counters["redis_errors"] += 1
+            logger.warning("cache.invalidate.redis_error", reason=str(exc))
+        removed = self._index.remove(key)
+        return bool(deleted) or removed
 
     async def flush(self) -> dict[str, int]:
-        """Flush the entire cache — clear all FAISS vectors and Redis cache keys.
-
-        Returns a dict with ``vectors_cleared`` and ``redis_keys_cleared``.
-        """
-        vectors_cleared = self._vector_store.flush()
-
-        # Delete all Redis keys with the cache: prefix
-        redis_keys_cleared = 0
+        vectors = self._index.flush()
+        keys = 0
         try:
             cursor = 0
             while True:
-                cursor, keys = await self._redis.scan(cursor=cursor, match="cache:*", count=100)
-                if keys:
-                    redis_keys_cleared += len(keys)
-                    await self._redis.delete(*keys)
+                cursor, batch = await self._redis.scan(cursor=cursor, match=KEY_PREFIX + "*", count=500)
+                if batch:
+                    keys += len(batch)
+                    await self._redis.delete(*batch)
                 if cursor == 0:
                     break
-        except Exception:
-            logger.warning("cache.flush.redis_error")
+        except Exception as exc:  # noqa: BLE001
+            self.counters["redis_errors"] += 1
+            logger.warning("cache.flush.redis_error", reason=str(exc))
+        await self.persist()
+        return {"vectors_cleared": vectors, "redis_keys_cleared": keys}
 
-        logger.info("cache.flushed", vectors_cleared=vectors_cleared, redis_keys_cleared=redis_keys_cleared)
-        return {"vectors_cleared": vectors_cleared, "redis_keys_cleared": redis_keys_cleared}
-
-    async def stats(self) -> dict[str, int]:
-        """Return cache statistics.
-
-        Returns a dict with ``total_vectors`` and ``redis_keys``.
-        """
-        total_vectors = self._vector_store.size
-
-        redis_keys = 0
+    async def stats(self) -> dict:
+        keys = 0
         try:
             cursor = 0
             while True:
-                cursor, keys = await self._redis.scan(cursor=cursor, match="cache:*", count=100)
-                redis_keys += len(keys)
+                cursor, batch = await self._redis.scan(cursor=cursor, match=KEY_PREFIX + "*", count=500)
+                keys += len(batch)
                 if cursor == 0:
                     break
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.warning("cache.stats.redis_unavailable")
+        return {
+            "total_vectors": len(self._index),
+            "redis_keys": keys,
+            "semantic_enabled": self.semantic_enabled,
+            "counters": dict(self.counters),
+        }
 
-        return {"total_vectors": total_vectors, "redis_keys": redis_keys}
+    # ── lifecycle ────────────────────────────────────────────────────────
+
+    async def persist(self) -> None:
+        if not self.semantic_enabled:
+            return
+        path = self._settings.vector_index_path
+        try:
+            await asyncio.to_thread(self._index.save, path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("cache.persist_failed", path=path, reason=str(exc))
+
+    def start_maintenance(self) -> None:
+        if self.semantic_enabled and self._maintenance is None:
+            self._maintenance = asyncio.create_task(self._maintenance_loop())
+
+    async def _maintenance_loop(self) -> None:
+        interval = max(5, self._settings.cache_persist_interval_seconds)
+        while True:
+            await asyncio.sleep(interval)
+            expired = self._index.remove_expired()
+            if expired:
+                logger.debug("cache.expired_vectors_removed", count=expired)
+            if self._index.dirty:
+                await self.persist()
 
     async def close(self) -> None:
-        """Persist FAISS index and close Redis connection."""
-        self._vector_store.persist()
+        if self._maintenance is not None:
+            self._maintenance.cancel()
+            try:
+                await self._maintenance
+            except asyncio.CancelledError:
+                pass
+        await self.persist()
         try:
-            await self._redis.close()
-        except Exception:
+            await self._redis.aclose()
+        except Exception:  # noqa: BLE001
             pass
+
+
+def _decode(raw: str) -> dict | None:
+    try:
+        payload = json.loads(raw)
+        return payload if isinstance(payload, dict) and "response" in payload else None
+    except (ValueError, TypeError):
+        return None

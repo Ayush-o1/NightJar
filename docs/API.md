@@ -20,7 +20,7 @@ Disabled by default. If `NIGHTJAR_API_KEYS` is set (see `.env.example`), every e
 Authorization: Bearer <token>
 ```
 
-using one of the configured tokens. A missing or invalid token returns `401` with a `WWW-Authenticate: Bearer` header. This is separate from the upstream provider keys (`OPENAI_API_KEY`, etc.) — it authenticates the caller to NightJar, not NightJar to the LLM provider.
+using one of the configured tokens. A missing or invalid token returns `401` (OpenAI-shaped error body) with a `WWW-Authenticate: Bearer` header. This is separate from the upstream provider keys (`OPENAI_API_KEY`, etc.) — it authenticates the caller to NightJar, not NightJar to the LLM provider.
 
 ---
 
@@ -32,9 +32,7 @@ using one of the configured tokens. A missing or invalid token returns `401` wit
 | `GET` | `/health` | Health check |
 | `GET` | `/v1/telemetry` | Paginated telemetry records |
 | `GET` | `/v1/telemetry/summary` | Aggregated telemetry statistics |
-| `GET` | `/v1/threshold` | Current adaptive threshold info |
-| `GET` | `/v1/threshold/history` | Past threshold evaluations |
-| `POST` | `/v1/threshold/evaluate` | Trigger threshold evaluation |
+| `GET`/`POST` | `/v1/threshold*` | Removed in 2.0, answers `410` |
 | `GET` | `/v1/cache/stats` | Cache statistics |
 | `DELETE` | `/v1/cache` | Flush entire cache |
 | `DELETE` | `/v1/cache/{key}` | Invalidate a specific cache entry |
@@ -105,18 +103,67 @@ All caching, routing, compression, and telemetry features work transparently reg
 | `X-Compression-Ratio` | e.g., `0.65` | Ratio of compressed to original token count |
 | `X-Similarity` | e.g., `0.97` | Cosine similarity score (only present on cache hit) |
 
+### Model selection
+
+| `model` in the request | Result |
+|---|---|
+| a real model name (`gpt-4o`) | Used as-is (default `ROUTING_MODE=explicit`) |
+| `nightjar/auto` | NightJar classifies the prompt and picks the simple- or complex-tier model |
+| any model, with `ROUTING_MODE=always` | NightJar picks the tier model, ignoring the request (pre-2.0 behaviour) |
+
+`X-Model-Selected` and `X-Model-Tier` show what was used. The telemetry `routing_reason` is prefixed `not_applied(<mode>):` when the router classified the prompt but did not switch models, so the tier it would have used is always visible. **Changed in 2.0:** before, every request was routed.
+
 ### Special Request Headers
 
 | Header | Description |
 |--------|-------------|
-| `X-NightJar-Model-Override` | Force a specific model, bypassing the router (e.g., `gpt-4o`) |
+| `X-NightJar-Cache` | `bypass`: skip lookup and store for this request. `refresh`: skip the lookup, call the provider, overwrite the stored entry. |
+| `X-NightJar-Model-Override` | Force a specific model regardless of routing (e.g. `gpt-4o`). Subject to `ALLOWED_MODELS` (`403 model_not_allowed`). |
 | `X-NightJar-No-Compress` | Set to `true` to skip context compression for this request |
+
+### Request limits
+
+| Limit | Default | Setting | Response |
+|---|---|---|---|
+| Request body size | 8 MiB | `MAX_REQUEST_BYTES` | `413`, code `request_too_large` |
+| Characters of text across all messages | 2,000,000 | `MAX_PROMPT_CHARS` | `400`, code `context_length_exceeded` |
+| `messages` | at least 1 | | `400` |
+| `temperature` / `top_p` / `n` | 0–2 / 0–1 / 1–16 | | `400` |
+
+Message `content` may be a string, a list of parts (`{"type":"text",...}`, `{"type":"image_url",...}`), or null (assistant messages that only carry `tool_calls`). Image and audio parts are forwarded but are not tokenized, embedded, or counted against the text budget.
+
+Every response carries `X-Request-ID`. Send your own `X-Request-ID` (letters, digits, `.`, `_`, `-`, up to 64 characters) to have it used instead; anything else is replaced.
 
 ### Notes
 
-- When `stream=true`, the response is returned as Server-Sent Events (SSE). Streaming requests bypass both caching and compression.
-- On cache hit, no upstream API call is made — the cached response is returned directly with `X-Cache-Hit: true`.
-- Upstream errors (429, 500, 502, etc.) are propagated to the client with the original status code and error body.
+- When `stream=true`, the response is Server-Sent Events. Streaming requests bypass caching and compression.
+- Failures **before** the first chunk (bad model, rate limit, provider down) return an ordinary HTTP error. A failure **after** the stream has started can't change the status code, so it arrives as a final `data: {"error": {...}}` event and **no** `data: [DONE]`. OpenAI SDKs raise on that event.
+- On a cache hit no upstream call is made. The response carries `X-Cache: HIT` and `X-Similarity`; a miss carries `X-Cache: MISS`.
+
+---
+
+## Errors
+
+Every error, from every endpoint, has the OpenAI shape:
+
+```json
+{"error": {"message": "...", "type": "invalid_request_error", "param": "messages", "code": "invalid_request"}}
+```
+
+| Status | `type` | When |
+|---|---|---|
+| 400 | `invalid_request_error` | Validation failed (`param` names the field), invalid JSON (`code: invalid_json`), prompt over budget, or the provider rejected the request (`code: upstream_invalid_request`) |
+| 401 | `authentication_error` | Missing/invalid NightJar API key. `WWW-Authenticate: Bearer` is set. |
+| 404 | `invalid_request_error` | Unknown route, or unknown model upstream (`code: model_not_found`) |
+| 413 | `invalid_request_error` | Body over `MAX_REQUEST_BYTES` |
+| 429 | `rate_limit_error` | The provider rate-limited the request |
+| 500 | `server_error` | Bug in NightJar. The message contains the request ID to report. |
+| 502 | `upstream_error` | Provider failed (`upstream_error`), or **provider rejected NightJar's own credentials** (`upstream_auth_error`) |
+| 503 / 504 | `upstream_error` | Provider unavailable / timed out |
+
+A provider's 401/403 is reported as **502**, never 401: it means the gateway's provider key is wrong, not that the caller's NightJar key was rejected. Provider error text is truncated to 500 characters and credential-looking strings are replaced with `[REDACTED]`.
+
+**Changed in 2.0:** validation errors used FastAPI's `{"detail": [...]}` body with status 422; they are now 400 with the shape above. Upstream 5xx used to be passed through with the provider's status; they are now 502. The `code` of upstream errors used to be the status code as a string (`"429"`); it is now a descriptive code.
 
 ---
 
@@ -148,7 +195,7 @@ Returns paginated telemetry records, newest first. All data is stored locally in
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `limit` | int | 50 | Maximum records to return |
+| `limit` | int | 50 | Maximum records to return (1–500) |
 | `offset` | int | 0 | Number of records to skip |
 
 ### Response
@@ -214,80 +261,26 @@ Returns aggregated telemetry statistics across all recorded requests.
 
 ---
 
-## `GET /v1/threshold`
+## Removed: `/v1/threshold`, `/v1/threshold/history`, `/v1/threshold/evaluate`
 
-Returns the current adaptive similarity threshold and its metadata.
-
-### Response
-
-```json
-{
-  "current_threshold": 0.93,
-  "baseline": 0.92,
-  "last_evaluated_at": "2026-03-27T12:00:00"
-}
-```
-
----
-
-## `GET /v1/threshold/history`
-
-Past evaluations, newest first — how the threshold has moved and what the hit rate was each time.
-
-### Query Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `limit` | int | 20 | Rows to return (1–200) |
-
-### Response
-
-```json
-{
-  "records": [
-    { "threshold": 0.93, "cache_hit_rate": 0.65, "evaluated_at": "2026-03-27T12:00:00+00:00" }
-  ]
-}
-```
-
-Empty (`{"records": []}`) until the first evaluation runs.
-
----
-
-## `POST /v1/threshold/evaluate`
-
-Manually triggers an adaptive threshold evaluation based on recent cache hit rates.
-
-### Response
-
-```json
-{
-  "threshold": 0.93,
-  "cache_hit_rate": 0.65,
-  "evaluated_at": "2026-03-27T12:00:00"
-}
-```
-
-### How Evaluation Works
-
-- Analyzes the most recent `ADAPTIVE_THRESHOLD_WINDOW` requests (default: 100)
-- If cache hit rate > 60%: threshold is raised by 0.01 (up to `ADAPTIVE_THRESHOLD_MAX`)
-- If cache hit rate < 20%: threshold is lowered by 0.01 (down to `ADAPTIVE_THRESHOLD_MIN`)
-- Otherwise: threshold stays the same
+These adaptive-threshold endpoints were removed in 2.0 and answer `410 Gone` (`code: endpoint_removed`) for one release. See ADR-008. Set `SIMILARITY_THRESHOLD` and calibrate with `benchmarks/cache_eval.py`.
 
 ---
 
 ## `GET /v1/cache/stats`
 
-Returns cache statistics including vector count, Redis key count, and current similarity threshold.
+Returns cache statistics: vector count, Redis key count, whether the semantic tier is on, the configured threshold, and in-process counters since start (hits by tier, misses, coalesced requests, guard rejections, store/skip counts, Redis and embedder errors).
 
 ### Response
 
 ```json
 {
-  "total_vectors": 150,
+  "total_vectors": 0,
   "redis_keys": 148,
-  "similarity_threshold": 0.93
+  "semantic_enabled": false,
+  "similarity_threshold": 0.92,
+  "counters": {"exact_hits": 61, "semantic_hits": 0, "coalesced": 3, "misses": 87, "guard_rejections": 0,
+               "stored": 85, "not_stored": 2, "redis_errors": 0, "embed_errors": 0}
 }
 ```
 
@@ -297,7 +290,7 @@ Returns cache statistics including vector count, Redis key count, and current si
 
 ## `DELETE /v1/cache`
 
-Flush the entire semantic cache. Clears all FAISS vectors and Redis cache keys. This operation is idempotent — calling it on an empty cache returns successfully.
+Flush the response cache: all vectors in the index and all NightJar keys in Redis (other keys in the same Redis are left alone). This operation is idempotent — calling it on an empty cache returns successfully.
 
 ### Response
 
@@ -313,7 +306,7 @@ Flush the entire semantic cache. Clears all FAISS vectors and Redis cache keys. 
 
 ## `DELETE /v1/cache/{key}`
 
-Invalidate a specific cache entry by its key. Removes both the FAISS vector and the corresponding Redis entry.
+Invalidate one cache entry by its key (the hash in the Redis key `nj:v2:r:<key>`). Removes both the vector and the stored response.
 
 ### Path Parameters
 
