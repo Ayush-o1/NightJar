@@ -36,7 +36,7 @@ jobs:
         run: uv run pytest tests/ -v --tb=short
         env:
           PYTHONPATH: .
-      - name: Benchmark sanity check (dry-run, no server needed)
-        run: uv run python benchmarks/run_benchmark.py --dry-run
+      - name: Gateway benchmark smoke run (real processes, fake provider; fails on errors, not on speed)
+        run: uv run python benchmarks/gateway_bench.py --smoke
         env:
           PYTHONPATH: .

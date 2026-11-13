@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 
 import structlog
@@ -89,6 +90,9 @@ class ResponseCache:
         self._redis = redis
         self._settings = settings
         self._flights: dict[str, asyncio.Future] = {}
+        # A miss embeds the prompt in lookup() and would embed it again in store(); one embedding is
+        # ~5 ms (measured), so lookup leaves its vector here for store() to reuse. Small and bounded.
+        self._pending_vectors: OrderedDict[str, object] = OrderedDict()
         self._maintenance: asyncio.Task | None = None
         self.counters: dict[str, int] = {
             "exact_hits": 0, "semantic_hits": 0, "coalesced": 0, "misses": 0,
@@ -137,6 +141,10 @@ class ResponseCache:
             self.counters["embed_errors"] += 1
             logger.warning("cache.lookup.embed_error", reason=str(exc))
             return CacheResult(hit=False, reason="embed_error")
+
+        self._pending_vectors[fp.exact_key] = vector
+        while len(self._pending_vectors) > 256:
+            self._pending_vectors.popitem(last=False)
 
         candidates = self._index.search(fp.partition, vector, k=5)
         if not candidates:
@@ -192,7 +200,9 @@ class ResponseCache:
 
         if self.semantic_enabled and fp.semantic_text:
             try:
-                vector = await asyncio.to_thread(self._embedder.embed, fp.semantic_text[:MAX_EMBED_CHARS])
+                vector = self._pending_vectors.pop(fp.exact_key, None)
+                if vector is None:
+                    vector = await asyncio.to_thread(self._embedder.embed, fp.semantic_text[:MAX_EMBED_CHARS])
                 self._index.add(fp.exact_key, fp.partition, vector, time.time() + ttl)
             except Exception as exc:  # noqa: BLE001 - exact tier still works without the vector
                 self.counters["embed_errors"] += 1

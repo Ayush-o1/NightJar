@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 """End-to-end benchmark runner for NightJar.
 
-Usage:
-    # Full benchmark (requires live NightJar + Redis):
+Usage (needs a running NightJar and a real provider key):
     python benchmarks/run_benchmark.py
 
-    # Dry-run (no live server, uses fixture data — for CI):
-    python benchmarks/run_benchmark.py --dry-run
+There is no dry-run mode. The previous one generated its "results" from a seeded random number generator
+and then asserted on them, so it could not fail for a real reason. For measurements that need no provider,
+use benchmarks/gateway_bench.py (against a fake provider) and benchmarks/cache_eval.py (cache correctness).
 
 Exit code 0 if all assertions pass, 1 otherwise.
 """
@@ -17,7 +17,6 @@ import argparse
 import datetime
 import json
 import os
-import random
 import sys
 import time
 from pathlib import Path
@@ -223,49 +222,6 @@ def _run_latency_benchmark(prompts: list[dict]) -> dict:
 # ── Dry-Run Mode ─────────────────────────────────────────────────────────
 
 
-def _run_dry_run() -> BenchmarkResult:
-    """Run benchmark with synthetic fixture data (no live server)."""
-    random.seed(42)
-
-    # Simulate cache benchmark
-    cache_hit_rate = 0.52
-    avg_miss = 450.0
-    avg_hit = 25.0
-    speedup = avg_miss / avg_hit
-
-    # Simulate routing benchmark
-    prompts = _load_prompts()
-    labels = [p["expected_model_tier"].lower() for p in prompts]
-    # Simulate ~88% accuracy
-    predictions = []
-    for label in labels:
-        if random.random() < 0.88:
-            predictions.append(label)
-        else:
-            predictions.append("complex" if label == "simple" else "simple")
-
-    routing = compute_routing_accuracy(predictions, labels)
-
-    # Simulate latency benchmark
-    latencies = [random.uniform(10, 800) for _ in range(100)]
-    lat_stats = compute_latency_stats(latencies)
-
-    result = BenchmarkResult(
-        timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        cache_hit_rate=cache_hit_rate,
-        avg_latency_miss_ms=avg_miss,
-        avg_latency_hit_ms=avg_hit,
-        speedup_factor=round(speedup, 1),
-        routing_accuracy=routing.accuracy,
-        routing_confusion_matrix=routing.confusion_matrix,
-        latency_stats=lat_stats.to_dict(),
-    )
-
-    # Run assertions
-    _check_assertions(result)
-    return result
-
-
 def _run_live() -> BenchmarkResult:
     """Run full benchmark against a live NightJar server."""
     prompts = _load_prompts()
@@ -324,19 +280,10 @@ def _check_assertions(result: BenchmarkResult) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="NightJar E2E Benchmark Runner")
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Run with synthetic fixture data (no live server required)",
-    )
-    args = parser.parse_args()
+    parser.parse_args()
 
-    if args.dry_run:
-        print("🔧 Running in dry-run mode (no live server)...")
-        result = _run_dry_run()
-    else:
-        print(f"🚀 Running live benchmark against {BASE_URL}...")
-        result = _run_live()
+    print(f"Running live benchmark against {BASE_URL} (needs a running NightJar and a real provider key)...")
+    result = _run_live()
 
     # Print report
     _print_report(result)

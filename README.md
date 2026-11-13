@@ -203,10 +203,11 @@ This is exactly what CI runs. The suite covers the router classifier (including 
 RUN_E2E_TESTS=1 OPENAI_API_KEY=sk-real-key PYTHONPATH=. pytest tests/test_e2e.py -m e2e
 ```
 
-**Benchmarks** measure routing accuracy, cache hit rate, and latency percentiles against the 1,000-prompt labeled set. See [benchmarks/README.md](benchmarks/README.md).
+**Benchmarks** (see [benchmarks/README.md](benchmarks/README.md)): `benchmarks/gateway_bench.py` measures gateway overhead and cache-hit latency against a local fake provider (no API key needed); `benchmarks/cache_eval.py` measures the semantic cache's false-hit rate. Results, with their limits, are in [docs/benchmarks/](docs/benchmarks/).
 
 ```bash
-python benchmarks/run_benchmark.py --dry-run   # no server required
+uv run python benchmarks/gateway_bench.py --smoke     # ~10 s, needs redis-server on PATH
+uv run python benchmarks/cache_eval.py                # loads the embedding model
 ```
 
 ---

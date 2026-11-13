@@ -253,3 +253,23 @@ async def test_cache_payload_never_contains_the_api_key_or_extra_metadata(redis_
     await cache.store(fp, answer())
     stored = json.loads(await redis_client.get(KEY_PREFIX + fp.exact_key))
     assert set(stored) == {"response", "prompt", "model", "created"}
+
+
+class TestEmbeddingReuse:
+    async def test_a_miss_followed_by_a_store_embeds_the_prompt_once(self, redis_client, fake_embedder):
+        cache, idx = make_cache(redis_client, fake_embedder, semantic=True)
+        fp = request("a brand new question")
+        assert not (await cache.lookup(fp)).hit
+        await cache.store(fp, answer())
+        assert fake_embedder.calls == 1 and len(idx) == 1
+
+    async def test_store_without_a_prior_lookup_still_embeds(self, redis_client, fake_embedder):
+        cache, idx = make_cache(redis_client, fake_embedder, semantic=True)
+        await cache.store(request("no lookup first"), answer())
+        assert fake_embedder.calls == 1 and len(idx) == 1
+
+    async def test_pending_vectors_are_bounded(self, redis_client, fake_embedder):
+        cache, _ = make_cache(redis_client, fake_embedder, semantic=True)
+        for i in range(400):
+            await cache.lookup(request(f"never stored {i}"))
+        assert len(cache._pending_vectors) <= 256

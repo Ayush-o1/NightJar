@@ -15,7 +15,7 @@ Branch: `feature/nightjar-modernization` (from `main` @ `1a4819c`). Not merged t
 | 8 Database and telemetry | Mostly done | Versioned additive migrations (tested on a 1.x-schema copy), failed requests recorded with `http_status`/`error_code`, `api_key_name`, `cache_tier`, NULL-not-0 for unknown tokens, streaming usage via `include_usage` (hidden from callers who didn't ask), write failures counted and shown in `/health`, retention. 452 tests. **Not done:** merging `telemetry` and `request_log`, write batching, cursor pagination. |
 | 9 Security and access | Mostly done | Auth modes (`auto`/`required`/`off`; Docker sets `required`), hashed scoped keys + CLI, per-key model allow-list and rate limit, admin scope, CORS closed by default, attribution by key name. 429 tests pass. **Not done:** per-key spend limits, cache tenant isolation, shared rate limiter, audit log, persisting key name in telemetry (Phase 8). |
 | 10 Dashboard | Not started | |
-| 11 Performance and benchmarking | Not started | |
+| 11 Performance and benchmarking | Mostly done | `gateway_bench.py` against a fake provider (overhead, exact/semantic hit latency, errors, RSS), profile of where overhead goes, fabricated `--dry-run` removed, CI runs a real smoke benchmark. 455 tests. **Not done:** a load generator that can find the gateway's real throughput ceiling; real-provider measurements; multi-run statistics. |
 | 12 Testing and quality | Not started | |
 | 13 Deployment and operations | Not started | |
 | 14 Final integration and release | Not started | |
@@ -63,5 +63,9 @@ Branch: `feature/nightjar-modernization` (from `main` @ `1a4819c`). Not merged t
 - **A second documented-variable bug, caught by the `.env.example` test:** the auth setting was named `auth` (env `AUTH`) while the docs and `Dockerfile` used `NIGHTJAR_AUTH`, so "secure by default in Docker" would have been false. My first live check missed it because keys existed in the database, which made `auto` mode enforce anyway. Renamed to `nightjar_auth`, and added tests that the env var alone enforces auth with zero keys and that the Dockerfile's variable is a real setting; re-verified live. Lesson recorded: a live check must isolate the variable it claims to test.
 
 - **Phase 8 decision:** the two-table merge was not done. The join key lives in LiteLLM's callback; `telemetry` now has what the dashboard needs, and the limitation is documented in [architecture/DATABASE_DESIGN.md](architecture/DATABASE_DESIGN.md). SQLite was kept; the conditions that would justify Postgres are listed there.
+
+- **Phase 11 results** ([benchmarks/GATEWAY_OVERHEAD.md](benchmarks/GATEWAY_OVERHEAD.md); Apple M4, one worker, 50 ms fake provider, one run per scenario): miss-path overhead about 14.5 ms at c=1 (NightJar's own code 0.7 ms, LiteLLM about 6.5 ms, about 7 ms unattributed); exact hit about 0.5 ms; semantic hit about 5 ms; 0 provider calls on hits. The c=64 rows were found to be saturated by the load generator and fake provider, and are marked uninterpretable.
+- **Optimization driven by measurement:** a semantic-tier miss embedded the prompt twice; reusing the lookup's vector took the c=1 miss from 91.9 to 80.2 ms and c=16 from 197.9 to 122.6 ms (single runs).
+- **Removed:** the `--dry-run` benchmark, whose numbers came from a seeded RNG (the source of the old "~88%" claim).
 
 Updated after each phase.

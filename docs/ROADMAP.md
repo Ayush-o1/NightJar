@@ -91,7 +91,7 @@ Each phase ends with: tests added and passing, `ruff` clean, full suite green, a
 - **Features:** moved to `app/static/`; views built from what the API actually returns (overview, request log with detail, cache by tier, routing decisions, cost with estimate labels, provider health from real error/latency data); no fabricated data (demo dataset removed, replaced with proper empty/disconnected states); keyboard and screen-reader basics; light theme.
 - **Tests:** JS unit tests for the aggregation functions; manual responsive check, with screenshots in `docs/`.
 
-### Phase 11 — Performance and benchmarking
+### Phase 11 — Performance and benchmarking  ✅ (real-provider and ceiling measurements not done)
 - **Features:** a local **fake OpenAI-compatible upstream** with configurable latency; a load generator; measurements of gateway overhead (miss path), exact-hit latency, semantic-hit latency, throughput and error rate at several concurrency levels, with environment recorded; embedding and FAISS profiling before any optimization; CI `--dry-run` replaced by a small real run against the fake upstream.
 - **Acceptance:** `docs/benchmarks/` holds methodology, raw results, and limits. No provider-savings claim without provider credentials.
 
