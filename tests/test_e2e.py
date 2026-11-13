@@ -1,4 +1,4 @@
-"""End-to-end integration tests for ContextForge.
+"""End-to-end integration tests for NightJar.
 
 These tests hit the REAL upstream API (OpenAI). They are designed to
 minimise cost:
@@ -44,6 +44,8 @@ import time
 
 import pytest
 from fastapi.testclient import TestClient
+
+from app import __version__
 
 pytestmark = [
     pytest.mark.e2e,
@@ -220,7 +222,7 @@ class TestContextCompression:
         assert float(ratio) == 1.0
 
     def test_no_compress_header(self, e2e_client):
-        """X-ContextForge-No-Compress header disables compression."""
+        """X-NightJar-No-Compress header disables compression."""
         resp = e2e_client.post(
             "/v1/chat/completions",
             json={
@@ -228,7 +230,7 @@ class TestContextCompression:
                 "messages": [{"role": "user", "content": "Say hello!"}],
                 "max_tokens": 50,
             },
-            headers={"x-contextforge-no-compress": "true"},
+            headers={"x-nightjar-no-compress": "true"},
         )
         assert resp.status_code == 200
         compressed = resp.headers.get("x-compressed")
@@ -334,7 +336,7 @@ class TestErrorPropagation:
                 "messages": [{"role": "user", "content": "test"}],
                 "max_tokens": 50,
             },
-            headers={"x-contextforge-model-override": "nonexistent-model-xyz"},
+            headers={"x-nightjar-model-override": "nonexistent-model-xyz"},
         )
         # Should get an error status from upstream (typically 404 or 400)
         assert resp.status_code >= 400
@@ -367,14 +369,14 @@ class TestStreamingPassthrough:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  TEST 10: X-ContextForge-Model-Override header
+#  TEST 10: X-NightJar-Model-Override header
 # ═══════════════════════════════════════════════════════════════════════
 
 class TestModelOverride:
     """Verify the override header forces a specific model."""
 
     def test_override_header(self, e2e_client):
-        """X-ContextForge-Model-Override should force the specified model."""
+        """X-NightJar-Model-Override should force the specified model."""
         resp = e2e_client.post(
             "/v1/chat/completions",
             json={
@@ -382,14 +384,14 @@ class TestModelOverride:
                 "messages": [{"role": "user", "content": "ping"}],
                 "max_tokens": 10,
             },
-            headers={"x-contextforge-model-override": "gpt-3.5-turbo"},
+            headers={"x-nightjar-model-override": "gpt-3.5-turbo"},
         )
         assert resp.status_code == 200
         assert resp.headers.get("x-model-selected") == "gpt-3.5-turbo"
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  TEST 11: X-ContextForge-No-Compress header (covered in TestContextCompression)
+#  TEST 11: X-NightJar-No-Compress header (covered in TestContextCompression)
 # ═══════════════════════════════════════════════════════════════════════
 
 # Covered above in TestContextCompression.test_no_compress_header
@@ -505,7 +507,7 @@ class TestHealthAndDashboard:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"
-        assert data["version"] == "1.0.0"
+        assert data["version"] == __version__
 
     def test_swagger_ui(self, e2e_client):
         """GET /docs should be accessible."""
@@ -516,7 +518,7 @@ class TestHealthAndDashboard:
         """GET /dashboard/ should serve the dashboard HTML."""
         resp = e2e_client.get("/dashboard/")
         assert resp.status_code == 200
-        assert "ContextForge" in resp.text
+        assert "NightJar" in resp.text
 
 
 # ═══════════════════════════════════════════════════════════════════════

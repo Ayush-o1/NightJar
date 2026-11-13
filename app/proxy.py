@@ -31,7 +31,7 @@ from app import telemetry as tel
 from app.config import Settings
 from app.models import ChatCompletionRequest
 
-# Silence LiteLLM's default verbose logging; ContextForge uses structlog
+# Silence LiteLLM's default verbose logging; NightJar uses structlog
 litellm.suppress_debug_info = True
 
 logger = structlog.get_logger()
@@ -193,7 +193,7 @@ class ProxyClient:
 
     LiteLLM Cache (Redis) provides:
     - Exact-match caching: identical prompts skip the API entirely
-    - Complements ContextForge's own semantic cache (FAISS) which catches
+    - Complements NightJar's own semantic cache (FAISS) which catches
       near-duplicate queries; this layer catches byte-identical repeats
     """
 

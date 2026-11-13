@@ -1,4 +1,4 @@
-"""Shared test fixtures for ContextForge test suite."""
+"""Shared test fixtures for NightJar test suite."""
 
 from __future__ import annotations
 
@@ -66,7 +66,6 @@ def test_settings() -> Settings:
     return Settings(
         openai_api_key="sk-test-key-123",
         anthropic_api_key="sk-ant-test-123",
-        openai_base_url="https://api.openai.com/v1",
         log_level="DEBUG",
         similarity_threshold=0.92,
         cache_ttl_seconds=86400,

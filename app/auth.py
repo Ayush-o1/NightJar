@@ -1,12 +1,12 @@
 """Optional bearer-token authentication for the gateway itself.
 
 Distinct from the upstream provider keys in app/config.py (OPENAI_API_KEY,
-etc.) — those authenticate ContextForge *to* the LLM providers. This module
-authenticates callers *to* ContextForge, so the gateway can be safely exposed
+etc.) — those authenticate NightJar *to* the LLM providers. This module
+authenticates callers *to* NightJar, so the gateway can be safely exposed
 beyond localhost.
 
-Disabled by default (CONTEXTFORGE_API_KEYS unset) to keep local single-user
-development frictionless. Set CONTEXTFORGE_API_KEYS to one or more
+Disabled by default (NIGHTJAR_API_KEYS unset) to keep local single-user
+development frictionless. Set NIGHTJAR_API_KEYS to one or more
 comma-separated tokens to require `Authorization: Bearer <token>` on every
 protected request. See docs/ARCHITECTURE.md for the threat model.
 """
@@ -28,7 +28,7 @@ def _matches_any(token: str, valid_keys: list[str]) -> bool:
 async def require_api_key(request: Request) -> None:
     """FastAPI dependency: enforce bearer-token auth when configured.
 
-    No-op when CONTEXTFORGE_API_KEYS is unset (auth_enabled == False), so
+    No-op when NIGHTJAR_API_KEYS is unset (auth_enabled == False), so
     existing local-dev usage is unaffected unless the operator opts in.
     """
     settings: Settings = request.app.state.settings

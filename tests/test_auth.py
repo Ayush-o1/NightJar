@@ -15,7 +15,7 @@ def auth_client(mock_proxy_client, mock_cache, mock_router):
     app.state.proxy_client = mock_proxy_client
     app.state.settings = Settings(
         openai_api_key="sk-test-key-123",
-        contextforge_api_keys="key-one, key-two",
+        nightjar_api_keys="key-one, key-two",
     )
     app.state.cache = mock_cache
     app.state.router = mock_router
@@ -23,7 +23,7 @@ def auth_client(mock_proxy_client, mock_cache, mock_router):
 
 
 class TestAuthDisabledByDefault:
-    """When CONTEXTFORGE_API_KEYS is unset, every endpoint stays open."""
+    """When NIGHTJAR_API_KEYS is unset, every endpoint stays open."""
 
     def test_chat_completions_works_without_auth_header(
         self, test_client, mock_proxy_client, chat_completion_fixture, sample_request_body
@@ -38,7 +38,7 @@ class TestAuthDisabledByDefault:
 
 
 class TestAuthEnabled:
-    """When CONTEXTFORGE_API_KEYS is set, protected endpoints require it."""
+    """When NIGHTJAR_API_KEYS is set, protected endpoints require it."""
 
     def test_missing_header_rejected(self, auth_client, sample_request_body):
         resp = auth_client.post("/v1/chat/completions", json=sample_request_body)
@@ -101,12 +101,12 @@ class TestSettingsParsing:
     """Settings.api_keys / auth_enabled parsing."""
 
     def test_empty_keys_disables_auth(self):
-        settings = Settings(contextforge_api_keys="")
+        settings = Settings(nightjar_api_keys="")
         assert settings.auth_enabled is False
         assert settings.api_keys == []
 
     def test_whitespace_and_commas_trimmed(self):
-        settings = Settings(contextforge_api_keys=" key-a ,key-b,, key-c")
+        settings = Settings(nightjar_api_keys=" key-a ,key-b,, key-c")
         assert settings.api_keys == ["key-a", "key-b", "key-c"]
         assert settings.auth_enabled is True
 

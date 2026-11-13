@@ -1,8 +1,8 @@
 #!/usr/bin/env python
-"""End-to-end benchmark runner for ContextForge.
+"""End-to-end benchmark runner for NightJar.
 
 Usage:
-    # Full benchmark (requires live ContextForge + Redis):
+    # Full benchmark (requires live NightJar + Redis):
     python benchmarks/run_benchmark.py
 
     # Dry-run (no live server, uses fixture data — for CI):
@@ -36,7 +36,7 @@ from benchmarks.benchmark_utils import (  # noqa: E402
 
 # ── Configuration ────────────────────────────────────────────────────────
 
-BASE_URL = os.getenv("CONTEXTFORGE_URL", "http://localhost:8000")
+BASE_URL = os.getenv("NIGHTJAR_URL") or os.getenv("CONTEXTFORGE_URL") or "http://localhost:8000"
 PROMPTS_PATH = Path(__file__).parent / "prompts_labeled.json"
 RESULTS_DIR = Path(__file__).parent / "results"
 
@@ -69,7 +69,7 @@ def _print_report(result: BenchmarkResult) -> None:
 
 def _print_rich(result: BenchmarkResult) -> None:
     console = Console()
-    console.print("\n[bold cyan]═══ ContextForge Benchmark Report ═══[/bold cyan]\n")
+    console.print("\n[bold cyan]═══ NightJar Benchmark Report ═══[/bold cyan]\n")
 
     # Cache
     t1 = Table(title="Cache Hit Rate Benchmark")
@@ -108,7 +108,7 @@ def _print_rich(result: BenchmarkResult) -> None:
 
 
 def _print_plain(result: BenchmarkResult) -> None:
-    print("\n═══ ContextForge Benchmark Report ═══\n")
+    print("\n═══ NightJar Benchmark Report ═══\n")
     print("--- Cache Hit Rate ---")
     print(f"  Cache Hit Rate:      {result.cache_hit_rate:.2%}")
     print(f"  Avg Latency (miss):  {result.avg_latency_miss_ms:.1f} ms")
@@ -267,7 +267,7 @@ def _run_dry_run() -> BenchmarkResult:
 
 
 def _run_live() -> BenchmarkResult:
-    """Run full benchmark against a live ContextForge server."""
+    """Run full benchmark against a live NightJar server."""
     prompts = _load_prompts()
 
     print("Running cache hit rate benchmark...")
@@ -323,7 +323,7 @@ def _check_assertions(result: BenchmarkResult) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="ContextForge E2E Benchmark Runner")
+    parser = argparse.ArgumentParser(description="NightJar E2E Benchmark Runner")
     parser.add_argument(
         "--dry-run",
         action="store_true",

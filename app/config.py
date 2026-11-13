@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     # --- Default model tiers (used by router & compressor) ---
     simple_model: str = "gpt-3.5-turbo"
     complex_model: str = "gpt-4o"
-    # --- Redis (connection URL for ContextForge's semantic cache) ---
+    # --- Redis (connection URL for NightJar's semantic cache) ---
     redis_url: str = "redis://localhost:6379"
     # --- Redis (discrete params for LiteLLM's built-in cache) ---
     redis_host: str = "localhost"
@@ -44,8 +44,6 @@ class Settings(BaseSettings):
     # --- Storage Paths ---
     sqlite_db_path: str = "./data/telemetry.db"
     faiss_index_path: str = "./data/faiss.index"
-    # --- OpenAI base URL (for testing / custom endpoints) ---
-    openai_base_url: str = "https://api.openai.com/v1"
     # --- Adaptive Threshold ---
     adaptive_threshold_enabled: bool = True
     adaptive_threshold_window: int = 100
@@ -61,7 +59,10 @@ class Settings(BaseSettings):
     # (checked against the `Authorization: Bearer <token>` header, distinct
     # from the upstream provider keys above). Empty = auth disabled, which is
     # the right default for local single-user development. Set this before
-    # exposing ContextForge beyond localhost.
+    # exposing NightJar beyond localhost.
+    nightjar_api_keys: str = ""
+    # Deprecated: the pre-rename name (CONTEXTFORGE_API_KEYS). Still read so
+    # existing deployments keep working; remove in the next minor release.
     contextforge_api_keys: str = ""
     # --- CORS ---
     # Comma-separated list of allowed origins, or "*" for any origin.
@@ -73,7 +74,13 @@ class Settings(BaseSettings):
     @property
     def api_keys(self) -> list[str]:
         """Parsed, non-empty list of accepted gateway bearer tokens."""
-        return [k.strip() for k in self.contextforge_api_keys.split(",") if k.strip()]
+        raw = ",".join([self.nightjar_api_keys, self.contextforge_api_keys])
+        return [k.strip() for k in raw.split(",") if k.strip()]
+
+    @property
+    def deprecated_settings_in_use(self) -> list[str]:
+        """Names of deprecated settings that currently have a value."""
+        return ["CONTEXTFORGE_API_KEYS"] if self.contextforge_api_keys.strip() else []
 
     @property
     def auth_enabled(self) -> bool:

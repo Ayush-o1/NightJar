@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock
 
+from app import __version__
 from app.proxy import UpstreamError
 
 # ───────────────────────── Health Check ──────────────────────────────────
@@ -21,7 +22,7 @@ class TestHealthCheck:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"
-        assert data["version"] == "1.0.0"
+        assert data["version"] == __version__
 
     def test_health_reports_redis_unknown_when_not_wired(self, test_client):
         """test_client's fixture doesn't set app.state.redis at all."""

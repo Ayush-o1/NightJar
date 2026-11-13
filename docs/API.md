@@ -1,4 +1,4 @@
-# ContextForge API Reference
+# NightJar API Reference
 
 > v1.0.0 — Full Multi-Provider (LiteLLM) Release
 
@@ -14,13 +14,13 @@ http://localhost:8000
 
 ## Authentication
 
-Disabled by default. If `CONTEXTFORGE_API_KEYS` is set (see `.env.example`), every endpoint below except `GET /health` requires:
+Disabled by default. If `NIGHTJAR_API_KEYS` is set (see `.env.example`), every endpoint below except `GET /health` requires:
 
 ```
 Authorization: Bearer <token>
 ```
 
-using one of the configured tokens. A missing or invalid token returns `401` with a `WWW-Authenticate: Bearer` header. This is separate from the upstream provider keys (`OPENAI_API_KEY`, etc.) — it authenticates the caller to ContextForge, not ContextForge to the LLM provider.
+using one of the configured tokens. A missing or invalid token returns `401` with a `WWW-Authenticate: Bearer` header. This is separate from the upstream provider keys (`OPENAI_API_KEY`, etc.) — it authenticates the caller to NightJar, not NightJar to the LLM provider.
 
 ---
 
@@ -50,7 +50,7 @@ OpenAI-compatible chat completions endpoint. Supports both streaming and non-str
 
 ### Request Body
 
-ContextForge accepts any OpenAI-compatible `model` string. You can also specify **provider-prefixed model names** to route through LiteLLM to alternate providers:
+NightJar accepts any OpenAI-compatible `model` string. You can also specify **provider-prefixed model names** to route through LiteLLM to alternate providers:
 
 ```json
 {
@@ -109,8 +109,8 @@ All caching, routing, compression, and telemetry features work transparently reg
 
 | Header | Description |
 |--------|-------------|
-| `X-ContextForge-Model-Override` | Force a specific model, bypassing the router (e.g., `gpt-4o`) |
-| `X-ContextForge-No-Compress` | Set to `true` to skip context compression for this request |
+| `X-NightJar-Model-Override` | Force a specific model, bypassing the router (e.g., `gpt-4o`) |
+| `X-NightJar-No-Compress` | Set to `true` to skip context compression for this request |
 
 ### Notes
 
@@ -122,7 +122,7 @@ All caching, routing, compression, and telemetry features work transparently reg
 
 ## `GET /health`
 
-Health check endpoint. Never requires authentication, even when `CONTEXTFORGE_API_KEYS` is set — it's the readiness/liveness probe.
+Health check endpoint. Never requires authentication, even when `NIGHTJAR_API_KEYS` is set — it's the readiness/liveness probe.
 
 `status` reflects whether the process is up and serving requests; it stays `"ok"` even if Redis is down, since the semantic cache degrades to a pass-through cache miss rather than failing requests (see [ARCHITECTURE.md](ARCHITECTURE.md)). `redis` reports that dependency's reachability separately.
 

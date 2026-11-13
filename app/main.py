@@ -1,4 +1,4 @@
-"""FastAPI application entry point for ContextForge."""
+"""FastAPI application entry point for NightJar."""
 
 from __future__ import annotations
 
@@ -13,11 +13,13 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from redis.asyncio import Redis
 
+from app import __version__
 from app import telemetry as tel
 from app.adaptive import ThresholdManager, get_active_threshold
 from app.api.admin import router as admin_router
 from app.auth import require_api_key
 from app.cache import SemanticCache
+from app.compat import get_header
 from app.compressor import compress_context
 from app.config import Settings, get_settings
 from app.embedder import Embedder
@@ -106,19 +108,21 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     threshold_manager = ThresholdManager(db_path=settings.sqlite_db_path)
     application.state.threshold_manager = threshold_manager
 
-    logger.info("contextforge.started", version="1.0.0", log_level=settings.log_level, test_mode=settings.test_mode)
+    for name in settings.deprecated_settings_in_use:
+        logger.warning("deprecated.setting", setting=name, use_instead="NIGHTJAR_API_KEYS")
+    logger.info("nightjar.started", version=__version__, log_level=settings.log_level, test_mode=settings.test_mode)
     yield
 
     # --- Shutdown ---
     await cache.close()
     await proxy_client.close()
-    logger.info("contextforge.shutdown")
+    logger.info("nightjar.shutdown")
 
 
 app = FastAPI(
-    title="ContextForge",
+    title="NightJar",
     description="Proxy middleware for LLM-powered apps — semantic caching, smart model routing, context compression.",
-    version="1.0.0",
+    version=__version__,
     lifespan=lifespan,
 )
 
@@ -202,7 +206,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
         messages_dicts = [m.model_dump(exclude_none=True) for m in body.messages]
 
         # --- Model routing ---
-        override_model = request.headers.get("x-contextforge-model-override")
+        override_model = get_header(request, "model-override")
         routing = router.route(body.model, messages_dicts, override_model=override_model)
         request.state.model_used = routing.model_selected
         request.state.tier = routing.tier.value
@@ -223,7 +227,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
             )
 
         # --- Context compression ---
-        no_compress = request.headers.get("x-contextforge-no-compress") == "true"
+        no_compress = get_header(request, "no-compress") == "true"
         compression_ratio = 1.0
         compressed_messages = messages_dicts
 

@@ -1,12 +1,12 @@
 # Architecture
 
-How ContextForge works internally. For endpoint schemas see [API.md](API.md); for why things were built this way see [DECISIONS.md](DECISIONS.md).
+How NightJar works internally. For endpoint schemas see [API.md](API.md); for why things were built this way see [DECISIONS.md](DECISIONS.md).
 
 ---
 
 ## Overview
 
-ContextForge is an OpenAI-compatible proxy that sits between an app and upstream LLM providers. Apps point their `base_url` at it and change nothing else. Every upstream call goes out through LiteLLM, which handles per-provider auth, retries, and failover.
+NightJar is an OpenAI-compatible proxy that sits between an app and upstream LLM providers. Apps point their `base_url` at it and change nothing else. Every upstream call goes out through LiteLLM, which handles per-provider auth, retries, and failover.
 
 Three things happen before a request leaves the building:
 
@@ -30,7 +30,7 @@ POST /v1/chat/completions
         │                       stream=true short-circuits here → LiteLLM
         ▼
   Compress ────────────────── only if tokens > threshold AND turns > min
-        │                       (app/compressor.py; skip via X-ContextForge-No-Compress)
+        │                       (app/compressor.py; skip via X-NightJar-No-Compress)
         ▼
   Cache lookup ───────────── embed → FAISS search → Redis fetch
         │                     (app/cache.py, threshold auto-tuned by app/adaptive.py)
@@ -144,7 +144,7 @@ Pages: **Overview** (summary cards, trends, recent requests), **Requests** (filt
 
 On narrow screens the tables re-render as stacked records rather than scrolling sideways — the cache result and latency of a request are the point of the row, and they shouldn't be the columns you have to drag to reach.
 
-Uses `GET /health`, `GET /v1/telemetry`, `GET /v1/telemetry/summary`, `GET /v1/cache/stats`, `GET /v1/threshold`, `GET /v1/threshold/history`, `POST /v1/threshold/evaluate`, `DELETE /v1/cache`. If `CONTEXTFORGE_API_KEYS` is set, all of them except `/health` need a bearer token — set one with `localStorage.setItem('contextforge_api_key', 'your-token')`.
+Uses `GET /health`, `GET /v1/telemetry`, `GET /v1/telemetry/summary`, `GET /v1/cache/stats`, `GET /v1/threshold`, `GET /v1/threshold/history`, `POST /v1/threshold/evaluate`, `DELETE /v1/cache`. If `NIGHTJAR_API_KEYS` is set, all of them except `/health` need a bearer token — set one with `localStorage.setItem('nightjar_api_key', 'your-token')`.
 
 Decisions worth knowing about:
 
@@ -156,7 +156,7 @@ Decisions worth knowing about:
 
 **No cache-entry browser.** The backend stores response hashes and FAISS vectors, never prompt text, so there is genuinely no per-entry list to render. The Cache page shows aggregate stats plus which recent requests were served from cache.
 
-**Escaping is load-bearing.** `model_used` is attacker-controllable — a client can set it through the `X-ContextForge-Model-Override` header, which the router passes through unsanitized. Every dynamic value goes through `escapeHtml()` in `tables.js` before reaching `innerHTML`. Don't reintroduce raw interpolation for these fields.
+**Escaping is load-bearing.** `model_used` is attacker-controllable — a client can set it through the `X-NightJar-Model-Override` header, which the router passes through unsanitized. Every dynamic value goes through `escapeHtml()` in `tables.js` before reaching `innerHTML`. Don't reintroduce raw interpolation for these fields.
 
 ---
 
@@ -164,7 +164,7 @@ Decisions worth knowing about:
 
 | Concern | Approach |
 |---------|----------|
-| Gateway auth | Opt-in bearer token (`app/auth.py`) on everything except `/health`, enabled by setting `CONTEXTFORGE_API_KEYS`; constant-time comparison. Off by default for local dev — see ADR-005. |
+| Gateway auth | Opt-in bearer token (`app/auth.py`) on everything except `/health`, enabled by setting `NIGHTJAR_API_KEYS`; constant-time comparison. Off by default for local dev — see ADR-005. |
 | CORS | Origins configurable via `CORS_ALLOW_ORIGINS`; credentialed (cookie) CORS is never enabled, so a wildcard origin carries no CSRF risk. |
 | XSS | All dynamic values escaped before HTML insertion in the dashboard (see above). |
 | Secrets | Provider keys live in `.env` (gitignored), mapped into `os.environ` for LiteLLM at startup; never logged or echoed in responses. |

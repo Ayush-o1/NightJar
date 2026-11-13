@@ -1,13 +1,13 @@
-# ContextForge Benchmarks
+# NightJar Benchmarks
 
-End-to-end performance benchmarks for the ContextForge LLM proxy middleware.
+End-to-end performance benchmarks for the NightJar LLM proxy middleware.
 
 ## Quick Start
 
 ### Full Benchmark (requires live server)
 
 ```bash
-# 1. Start ContextForge + Redis
+# 1. Start NightJar + Redis
 docker compose up -d
 
 # 2. Run benchmarks
@@ -99,13 +99,13 @@ benchmarks/results/benchmark_YYYYMMDD_HHMMSS.json
 ## Prerequisites
 
 For the **full benchmark** (not dry-run):
-- A running ContextForge instance (default: `http://localhost:8000`)
+- A running NightJar instance (default: `http://localhost:8000`)
 - Redis running (default: `redis://localhost:6379`)
-- OpenAI API key configured (or `OPENAI_BASE_URL` pointing to a mock)
+- A provider API key configured. (Phase 11 replaces this with a local fake upstream so no key is needed.)
 
-Set `CONTEXTFORGE_URL` env var to override the default base URL:
+Set `NIGHTJAR_URL` env var to override the default base URL:
 ```bash
-CONTEXTFORGE_URL=http://my-server:8000 python benchmarks/run_benchmark.py
+NIGHTJAR_URL=http://my-server:8000 python benchmarks/run_benchmark.py
 ```
 
 ---

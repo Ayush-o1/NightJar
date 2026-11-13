@@ -1,10 +1,10 @@
-# ContextForge
+# NightJar
 
 **An OpenAI-compatible LLM proxy that cuts cost and latency without touching your app code.**
 
-Point your client at `localhost:8000` instead of `api.openai.com`. ContextForge sits in between and applies semantic caching, rule-based model routing, and context compression before forwarding the request through LiteLLM to whichever provider you configured.
+Point your client at `localhost:8000` instead of `api.openai.com`. NightJar sits in between and applies semantic caching, rule-based model routing, and context compression before forwarding the request through LiteLLM to whichever provider you configured.
 
-[![CI](https://github.com/Ayush-o1/contextforge/actions/workflows/ci.yml/badge.svg)](https://github.com/Ayush-o1/contextforge/actions/workflows/ci.yml)
+[![CI](https://github.com/Ayush-o1/NightJar/actions/workflows/ci.yml/badge.svg)](https://github.com/Ayush-o1/NightJar/actions/workflows/ci.yml)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
@@ -86,8 +86,8 @@ Full detail — components, data model, concurrency, dashboard design, threat mo
 ### Docker (simplest — brings up Redis too)
 
 ```bash
-git clone https://github.com/Ayush-o1/contextforge.git
-cd contextforge
+git clone https://github.com/Ayush-o1/NightJar.git
+cd NightJar
 
 cp .env.example .env      # add at least one provider key
 
@@ -98,13 +98,12 @@ curl http://localhost:8000/health
 ### Local
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+uv sync --frozen          # exact versions from uv.lock; see docs/operations/DEPENDENCIES.md
 
 cp .env.example .env      # add at least one provider key
 docker run -d -p 6379:6379 redis:7-alpine
 
-uvicorn app.main:app --port 8000 --reload
+uv run uvicorn app.main:app --port 8000 --reload
 ```
 
 First start downloads the embedding model (~80 MB) and caches it.
@@ -126,7 +125,7 @@ response = client.chat.completions.create(
 
 Responses carry diagnostic headers: `X-Cache` (HIT/MISS), `X-Similarity`, `X-Model-Tier`, `X-Model-Selected`, `X-Compressed`, `X-Compression-Ratio`.
 
-Two request headers are recognized: `X-ContextForge-Model-Override` (force a model, bypass routing) and `X-ContextForge-No-Compress: true`.
+Two request headers are recognized: `X-NightJar-Model-Override` (force a model, bypass routing) and `X-NightJar-No-Compress: true`.
 
 ---
 
@@ -145,7 +144,7 @@ Every variable is documented inline in [`.env.example`](.env.example). The ones 
 | `COMPRESS_THRESHOLD` | `2000` | Token count that triggers compression |
 | `COMPRESS_MIN_TURNS` | `6` | Minimum turns before compression applies |
 | `ADAPTIVE_THRESHOLD_ENABLED` | `true` | Auto-tune the similarity threshold |
-| `CONTEXTFORGE_API_KEYS` | `""` | Comma-separated bearer tokens. Empty = auth off (local-dev default) |
+| `NIGHTJAR_API_KEYS` | `""` | Comma-separated bearer tokens. Empty = auth off (local-dev default) |
 | `CORS_ALLOW_ORIGINS` | `*` | Allowed origins; credentialed CORS is never enabled |
 | `TEST_MODE` | `false` | Force the cheapest model for every request |
 
@@ -171,7 +170,7 @@ Every variable is documented inline in [`.env.example`](.env.example). The ones 
 
 Schemas and examples: [docs/API.md](docs/API.md).
 
-**Auth is off by default.** Set `CONTEXTFORGE_API_KEYS` and every endpoint except `/health` requires `Authorization: Bearer <token>`. Do that before exposing this beyond localhost — it's a proxy holding your provider keys.
+**Auth is off by default.** Set `NIGHTJAR_API_KEYS` and every endpoint except `/health` requires `Authorization: Bearer <token>`. Do that before exposing this beyond localhost — it's a proxy holding your provider keys.
 
 ---
 
@@ -188,8 +187,8 @@ It's plain HTML, CSS and JavaScript with Chart.js — no build step, no framewor
 ## Testing
 
 ```bash
-ruff check app/ tests/ benchmarks/
-PYTHONPATH=. pytest tests/            # mocked — no network, no Redis needed
+uv run ruff check app/ tests/ benchmarks/
+PYTHONPATH=. uv run pytest tests/     # mocked — no network, no Redis needed
 ```
 
 This is exactly what CI runs. The suite covers the router classifier (including accuracy against the labeled dataset), cache hit/miss and Redis-outage degradation, compression triggers and fallback, telemetry read/write, adaptive threshold bounds, auth on/off, failover, tool-call handling, and the proxy's error propagation.
@@ -218,7 +217,7 @@ python benchmarks/run_benchmark.py --dry-run   # no server required
 
 **Streaming skips the cache.** You can't match a token stream against a cache before it exists, and buffering it to compress would defeat streaming. Streamed requests are still routed and still logged.
 
-**The dashboard escapes everything.** `model_used` is attacker-controllable through the `X-ContextForge-Model-Override` header, so every dynamic value is escaped before it reaches `innerHTML`.
+**The dashboard escapes everything.** `model_used` is attacker-controllable through the `X-NightJar-Model-Override` header, so every dynamic value is escaped before it reaches `innerHTML`.
 
 ---
 

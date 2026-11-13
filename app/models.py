@@ -6,6 +6,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app import __version__
+
 # ──────────────────────────────── Request ────────────────────────────────
 
 
@@ -139,5 +141,5 @@ class HealthResponse(BaseModel):
     """
 
     status: str = "ok"
-    version: str = "1.0.0"
+    version: str = __version__
     redis: str = "unknown"
