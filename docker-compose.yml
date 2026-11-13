@@ -1,6 +1,11 @@
-# ═══════════════════════════════════════════════════════════════════════
-#  NightJar — Docker Compose (Production-Ready)
-# ═══════════════════════════════════════════════════════════════════════
+# NightJar + Redis.
+#
+#   cp .env.example .env     # set a provider key (OPENAI_API_KEY ...) and NIGHTJAR_API_KEYS=<a key you choose>
+#   docker compose up --build -d
+#   curl http://localhost:8000/health
+#
+# The image runs with NIGHTJAR_AUTH=required, so requests need `Authorization: Bearer <key>`
+# (set NIGHTJAR_API_KEYS in .env, or create scoped keys: docker compose exec app python -m app.keys create ...).
 
 services:
   app:
@@ -9,12 +14,15 @@ services:
       - "${PORT:-8000}:8000"
     env_file:
       - .env
+    environment:
+      # Overrides REDIS_URL from .env: inside the container "localhost" is the container itself,
+      # so the .env default would silently leave the cache without Redis.
+      REDIS_URL: redis://redis:6379
     depends_on:
       redis:
         condition: service_healthy
     volumes:
       - app-data:/app/data
-      - model-cache:/home/appuser/.cache
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -25,8 +33,8 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    # Not published to the host: only the app (on the compose network) can reach it. It holds cached
+    # responses and prompt text. To inspect it: docker compose exec redis redis-cli
     command: >
       redis-server
       --maxmemory 512mb
@@ -45,6 +53,4 @@ volumes:
   app-data:
     driver: local
   redis-data:
-    driver: local
-  model-cache:
     driver: local

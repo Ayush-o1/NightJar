@@ -95,13 +95,13 @@ Each phase ends with: tests added and passing, `ruff` clean, full suite green, a
 - **Features:** a local **fake OpenAI-compatible upstream** with configurable latency; a load generator; measurements of gateway overhead (miss path), exact-hit latency, semantic-hit latency, throughput and error rate at several concurrency levels, with environment recorded; embedding and FAISS profiling before any optimization; CI `--dry-run` replaced by a small real run against the fake upstream.
 - **Acceptance:** `docs/benchmarks/` holds methodology, raw results, and limits. No provider-savings claim without provider credentials.
 
-### Phase 12 — Testing and quality engineering (continuous)
+### Phase 12 — Testing and quality engineering (continuous)  ✅
 Integration tests against real Redis (CI service container); fake-upstream end-to-end tests; failure-path matrix; test isolation (temp dirs instead of `./data`); coverage report; CI runs lint, tests, a Docker build, and the benchmark smoke.
 
-### Phase 13 — Deployment and operations
+### Phase 13 — Deployment and operations  ✅ (arm64 verified; x86_64 not)
 Image without dev dependencies; Redis not published to the host and password-protected by default in compose; compose health checks and resource notes; `/health` (liveness) and `/ready` (dependencies); env documentation; backup/restore notes for SQLite and the FAISS snapshot; runbook; troubleshooting. Docker daemon was unavailable at baseline, so the build must be verified, or reported as unverified.
 
-### Phase 14 — Final integration and release
+### Phase 14 — Final integration and release  ✅ (not merged to main, by design)
 README rewrite; API docs; [LEARNING_GUIDE.md](LEARNING_GUIDE.md); [INTERVIEW_PREPARATION.md](INTERVIEW_PREPARATION.md) (grounded only in shipped code); migration guide; changelog; full verification pass; tag candidate. Not merged to `main` automatically.
 
 ## Documentation deliverables by phase

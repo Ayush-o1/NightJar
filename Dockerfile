@@ -12,13 +12,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies into a virtual env for clean copy
+# PyTorch from the CPU-only wheel index. The default Linux x86_64 wheel drags in CUDA libraries (gigabytes)
+# that a CPU-only gateway never uses. The exported lock also lists torch's CUDA dependencies (nvidia-*,
+# triton) as separate pins, so they are filtered out here or `pip install -r` would fetch them anyway.
+# The torch version is taken from the lock so the two cannot drift.
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN TORCH_VERSION=$(grep -E '^torch==' requirements.txt | head -1 | cut -d= -f3 | cut -d' ' -f1) \
+    && pip install --no-cache-dir "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cpu \
+    && grep -viE '^(nvidia-|triton|cuda-|torch==)' requirements.txt > requirements.cpu.txt \
+    && pip install --no-cache-dir -r requirements.cpu.txt
 
-# Pre-download the sentence-transformers embedding model at build time
-# so it's cached in the image and not downloaded on every container start.
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
+# Pre-download the embedding model so the semantic tier starts without network access. Only needed when
+# SEMANTIC_CACHE=true; build with --build-arg PRELOAD_EMBEDDING_MODEL=false to skip it (about 90 MB).
+ARG PRELOAD_EMBEDDING_MODEL=true
+RUN if [ "$PRELOAD_EMBEDDING_MODEL" = "true" ]; then \
+      python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"; \
+    else mkdir -p /root/.cache; fi
 
 
 # ─── Stage 2: Runtime ────────────────────────────────────────────────
@@ -39,14 +48,14 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy pre-downloaded model cache from builder
-COPY --from=builder /root/.cache /home/appuser/.cache
+COPY --from=builder --chown=appuser:appuser /root/.cache /home/appuser/.cache
 
 # Copy application code
 COPY app/ ./app/
 COPY config/ ./config/
 
 # Create data directory for SQLite and FAISS persistence
-RUN mkdir -p /app/data && chown -R appuser:appuser /app /home/appuser/.cache
+RUN mkdir -p /app/data && chown -R appuser:appuser /app
 
 # Switch to non-root user
 USER appuser

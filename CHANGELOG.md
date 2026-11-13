@@ -23,7 +23,7 @@ Renamed from ContextForge. Migration guide with every breaking change: [docs/ope
 
 ### Engineering
 - Locked dependencies (`uv.lock`); FAISS, sqlmodel, sqlalchemy and aiofiles removed; OpenTelemetry optional.
-- Tests: 175 → 460, cache tests against a real Redis, reliability tests against a fake provider over real HTTP.
+- Tests: 175 → 462, cache tests against a real Redis, reliability tests against a fake provider over real HTTP.
 - Benchmarks that measure (`gateway_bench.py`, `cache_eval.py`); the `--dry-run` benchmark that generated numbers from a random number generator was removed.
 - Dashboard shows only real data, marks failures, moved to `app/static/`.
 - Docker: CPU-only PyTorch, compose overrides `REDIS_URL`, Redis not published, `NIGHTJAR_AUTH=required`.

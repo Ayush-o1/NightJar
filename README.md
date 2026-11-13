@@ -109,7 +109,7 @@ Every variable is documented in [`.env.example`](.env.example). The ones you wil
 
 ```bash
 uv run ruff check app/ tests/ benchmarks/
-PYTHONPATH=. uv run pytest tests/          # 460 tests; Redis is used if available (see below)
+PYTHONPATH=. uv run pytest tests/          # 462 tests; Redis is used if available (see below)
 ```
 
 Cache tests run against a real Redis: `REDIS_TEST_URL` if set (CI uses a service container), otherwise a throwaway `redis-server` on a free port, otherwise they skip. Reliability tests run against a fake provider ([`benchmarks/fake_upstream.py`](benchmarks/fake_upstream.py)) over real HTTP through the real LiteLLM Router, so no test needs an API key or leaves the machine. Live provider tests (`tests/test_e2e.py`, marker `e2e`) are excluded by default and cost real money.

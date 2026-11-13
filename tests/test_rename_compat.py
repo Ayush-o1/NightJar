@@ -115,3 +115,14 @@ def test_a_local_dotenv_cannot_change_test_behaviour(tmp_path, monkeypatch):
     assert os.environ["LITELLM_MODE"] == "PRODUCTION"  # otherwise litellm loads the repo .env into os.environ
     assert Settings().api_keys == []
     assert "NIGHTJAR_API_KEYS" not in os.environ
+
+
+def test_env_example_does_not_override_the_docker_auth_default():
+    """The image sets NIGHTJAR_AUTH=required. compose passes .env to the container with `env_file`, which wins over
+    the image's ENV, so an uncommented NIGHTJAR_AUTH=auto in .env.example would silently make a fresh Docker
+    install open. (This happened: caught by running the container with zero keys.)"""
+    import re
+    from pathlib import Path
+
+    text = (Path(__file__).parent.parent / ".env.example").read_text()
+    assert not re.search(r"(?m)^NIGHTJAR_AUTH=", text)
