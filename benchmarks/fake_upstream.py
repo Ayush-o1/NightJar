@@ -9,6 +9,8 @@ Behaviour is controllable per request with headers or per process with flags:
   --latency-ms N        fixed delay before answering (simulates provider latency)
   --fail-rate F         fraction of requests answered with --fail-status (default 500)
   --fail-status N
+  (tests also set fail_first_n: fail the first N requests, then succeed)
+  --stream-delay-ms N   delay between streamed chunks
 A message containing the text "[fail:STATUS]" makes that single request fail with STATUS.
 GET /_stats returns request counts (how many calls actually reached the "provider").
 """
@@ -27,8 +29,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 app = FastAPI()
-CONFIG = {"latency_ms": 0.0, "fail_rate": 0.0, "fail_status": 500}
-STATS = {"requests": 0, "stream_requests": 0, "failures": 0}
+CONFIG = {"latency_ms": 0.0, "fail_rate": 0.0, "fail_status": 500, "stream_delay_ms": 10.0, "fail_first_n": 0}
+STATS = {"requests": 0, "stream_requests": 0, "failures": 0, "stream_aborted": 0}
 
 
 def _text(content) -> str:
@@ -59,7 +61,8 @@ async def chat(request: Request):
         await asyncio.sleep(CONFIG["latency_ms"] / 1000)
 
     forced = re.search(r"\[fail:(\d{3})\]", last)
-    if forced or random.random() < CONFIG["fail_rate"]:
+    first_n = STATS["requests"] <= CONFIG["fail_first_n"]
+    if forced or first_n or random.random() < CONFIG["fail_rate"]:
         STATS["failures"] += 1
         status = int(forced.group(1)) if forced else CONFIG["fail_status"]
         return JSONResponse(
@@ -77,11 +80,15 @@ async def chat(request: Request):
 
         async def events():
             words = answer.split(" ")
-            for i, w in enumerate(words):
-                chunk = {**base, "object": "chat.completion.chunk",
-                         "choices": [{"index": 0, "delta": {"content": w + " "}, "finish_reason": None}]}
-                yield f"data: {json.dumps(chunk)}\n\n"
-                await asyncio.sleep(0.01)
+            try:
+                for w in words:
+                    chunk = {**base, "object": "chat.completion.chunk",
+                             "choices": [{"index": 0, "delta": {"content": w + " "}, "finish_reason": None}]}
+                    yield f"data: {json.dumps(chunk)}\n\n"
+                    await asyncio.sleep(CONFIG["stream_delay_ms"] / 1000)
+            except (asyncio.CancelledError, GeneratorExit):
+                STATS["stream_aborted"] += 1  # the client (NightJar) went away mid-stream
+                raise
             final = {**base, "object": "chat.completion.chunk",
                      "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
             yield f"data: {json.dumps(final)}\n\n"
@@ -102,8 +109,10 @@ def main() -> None:
     ap.add_argument("--latency-ms", type=float, default=0)
     ap.add_argument("--fail-rate", type=float, default=0)
     ap.add_argument("--fail-status", type=int, default=500)
+    ap.add_argument("--stream-delay-ms", type=float, default=10)
     a = ap.parse_args()
-    CONFIG.update(latency_ms=a.latency_ms, fail_rate=a.fail_rate, fail_status=a.fail_status)
+    CONFIG.update(latency_ms=a.latency_ms, fail_rate=a.fail_rate, fail_status=a.fail_status,
+                  stream_delay_ms=a.stream_delay_ms)
     uvicorn.run(app, host="127.0.0.1", port=a.port, log_level="warning")
 
 

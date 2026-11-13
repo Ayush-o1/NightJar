@@ -32,6 +32,7 @@ from app.errors import (
     sse_error_event,
 )
 from app.fingerprint import build_fingerprint
+from app.limits import ConcurrencyLimiter
 from app.middleware import TelemetryMiddleware
 from app.models import ChatCompletionRequest, ChatMessage, HealthResponse
 from app.proxy import ProxyClient, UpstreamError
@@ -101,6 +102,8 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     cache.start_maintenance()
     application.state.cache = cache
     logger.info("cache.ready", semantic_enabled=cache.semantic_enabled, ttl_seconds=settings.cache_ttl_seconds)
+
+    application.state.limiter = ConcurrencyLimiter(settings.max_concurrent_upstream)
 
     # --- Model router (with test_mode support) ---
     router = ModelRouter(
@@ -184,7 +187,8 @@ async def health_check(request: Request) -> HealthResponse:
             redis_status = "ok"
         except Exception:  # noqa: BLE001
             redis_status = "unreachable"
-    return HealthResponse(redis=redis_status)
+    limiter = getattr(request.app.state, "limiter", None)
+    return HealthResponse(redis=redis_status, upstream=limiter.stats() if limiter else None)
 
 
 # ─────────────────── Chat Completions Endpoint ───────────────────────────
@@ -230,7 +234,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
 
         # Streaming bypasses cache and compression
         if body.stream:
-            return await _stream_response(proxy_client, body, routing)
+            return await _stream_response(proxy_client, body, routing, getattr(request.app.state, "limiter", None))
 
         # --- Cache: fingerprint the ORIGINAL request, so the key reflects what the caller asked ---
         cache_mode = (get_header(request, "cache") or "").lower()  # "", "bypass" or "refresh"
@@ -258,7 +262,12 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
         # --- Miss: compress (only now), call the provider, store ---
         no_compress = get_header(request, "no-compress") == "true"
         compression_ratio = 1.0
+        limiter: ConcurrencyLimiter | None = getattr(request.app.state, "limiter", None)
+        slot_taken = False
         try:
+            if limiter is not None:
+                limiter.acquire()  # 503 right away when saturated; the except below releases the flight
+                slot_taken = True
             upstream_messages = messages_dicts
             if not no_compress:
                 upstream_messages, compression_ratio = await compress_context(
@@ -269,9 +278,14 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
             if use_cache:
                 await cache.store(fp, response_data)
         except BaseException as exc:
+            if slot_taken:
+                limiter.release()
+                slot_taken = False
             if flight is not None:  # followers get the same error; a cancelled leader releases them to retry
                 flight.finish(error=exc if isinstance(exc, Exception) else None)
             raise
+        if slot_taken:
+            limiter.release()
         if flight is not None:
             flight.finish(response=response_data)
 
@@ -347,7 +361,9 @@ def _cache_hit_response(request: Request, routing, response: dict, tier: str | N
     )
 
 
-async def _stream_response(proxy_client: ProxyClient, body: ChatCompletionRequest, routing) -> StreamingResponse:
+async def _stream_response(
+    proxy_client: ProxyClient, body: ChatCompletionRequest, routing, limiter: ConcurrencyLimiter | None = None,
+) -> StreamingResponse:
     """Start the upstream stream, then hand back an SSE response.
 
     The first chunk is awaited *before* the response is created. Failures that happen while
@@ -355,13 +371,21 @@ async def _stream_response(proxy_client: ProxyClient, body: ChatCompletionReques
     HTTP error status. Once bytes are on the wire the status can't change, so a later failure
     is sent in-band as an ``error`` event, which the OpenAI SDKs raise as an exception.
     """
+    if limiter is not None:
+        limiter.acquire()  # held until the stream ends; released in events() or on a connect failure
     stream = proxy_client.forward_stream(body, model_override=routing.model_selected)
     try:
         first = await stream.__anext__()
     except StopAsyncIteration:
         first = None
     except UpstreamError as exc:
+        if limiter is not None:
+            limiter.release()
         raise from_upstream(exc.status_code, exc.detail) from exc
+    except BaseException:
+        if limiter is not None:
+            limiter.release()
+        raise
 
     async def events() -> AsyncGenerator[str, None]:
         try:
@@ -377,9 +401,13 @@ async def _stream_response(proxy_client: ProxyClient, body: ChatCompletionReques
                 502, "The upstream stream was interrupted.", type="upstream_error", code="stream_interrupted",
             ))
         finally:
-            aclose = getattr(stream, "aclose", None)
-            if aclose is not None:
-                await aclose()
+            try:
+                aclose = getattr(stream, "aclose", None)
+                if aclose is not None:
+                    await aclose()
+            finally:
+                if limiter is not None:
+                    limiter.release()
 
     return StreamingResponse(
         events(),

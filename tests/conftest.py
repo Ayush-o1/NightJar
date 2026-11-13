@@ -37,6 +37,23 @@ def _init_telemetry_db() -> None:
 
 
 @pytest.fixture(autouse=True)
+def _isolate_global_state():
+    """Restore os.environ and app.state after every test.
+
+    ProxyClient copies provider keys into os.environ (LiteLLM reads them from there) and the app
+    singleton's `state` is shared, so without this one test's fake keys or leftover Redis client
+    leak into the next. That once made later tests build fallbacks to real providers with fake keys.
+    """
+    saved_env = dict(os.environ)
+    saved_state = dict(app.state._state)
+    yield
+    os.environ.clear()
+    os.environ.update(saved_env)
+    app.state._state.clear()
+    app.state._state.update(saved_state)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_summary_memo() -> None:
     """The compressor memoises summaries in process memory; never let one test's summary leak into another."""
     from app.compressor import clear_summary_memo
@@ -256,3 +273,56 @@ async def redis_client(redis_url):
     yield client
     await client.flushdb()
     await client.aclose()
+
+
+# ── Fake provider (real HTTP, real LiteLLM path) ────────────────────────────
+import threading  # noqa: E402
+
+
+class FakeProvider:
+    """Handle to the in-process fake upstream (benchmarks/fake_upstream.py)."""
+
+    def __init__(self, url: str, config: dict, stats: dict) -> None:
+        self.url, self.config, self.stats = url, config, stats
+
+    def reset(self, **config) -> None:
+        for k in self.stats:
+            self.stats[k] = 0
+        self.config.update({"latency_ms": 0.0, "fail_rate": 0.0, "fail_status": 500, "stream_delay_ms": 10.0,
+                            "fail_first_n": 0})
+        self.config.update(config)
+
+
+@pytest.fixture(scope="session")
+def fake_provider():
+    import uvicorn
+
+    from benchmarks import fake_upstream
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(fake_upstream.app, host="127.0.0.1", port=port, log_level="error"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.time() + 10
+    while not server.started and time.time() < deadline:
+        time.sleep(0.05)
+    assert server.started, "fake upstream did not start"
+    old = {k: os.environ.get(k) for k in ("OPENAI_API_BASE", "OPENAI_API_KEY")}
+    os.environ["OPENAI_API_BASE"] = f"http://127.0.0.1:{port}/v1"
+    os.environ.setdefault("OPENAI_API_KEY", "sk-fake-for-tests")
+    yield FakeProvider(f"http://127.0.0.1:{port}", fake_upstream.CONFIG, fake_upstream.STATS)
+    server.should_exit = True
+    thread.join(timeout=5)
+    for k, v in old.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+
+@pytest.fixture
+def provider(fake_provider):
+    fake_provider.reset()
+    return fake_provider

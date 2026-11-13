@@ -96,6 +96,13 @@ def payload_too_large(limit_bytes: int) -> NightJarError:
     )
 
 
+def overloaded(limit: int) -> NightJarError:
+    return NightJarError(
+        503, f"The gateway is at its limit of {limit} concurrent upstream requests. Retry shortly.",
+        type="upstream_error", code="gateway_overloaded", headers={"Retry-After": "1"},
+    )
+
+
 def context_too_large(chars: int, limit: int) -> NightJarError:
     return NightJarError(
         400, f"Messages contain {chars} characters of text; the limit is {limit}.",
@@ -125,12 +132,14 @@ def from_upstream(status_code: int, detail: str) -> NightJarError:
     if status_code in (400, 413, 422):
         return NightJarError(400, f"Upstream rejected the request: {message}", type="invalid_request_error",
                              code="upstream_invalid_request")
+    # Server-side failures get fixed text. The provider's own wording adds nothing a caller can act
+    # on and can leak internals; the detail is logged with the request id instead.
     if status_code in (408, 504):
-        return NightJarError(504, f"Upstream timed out: {message}", type="upstream_error", code="upstream_timeout")
+        return NightJarError(504, "The upstream provider timed out.", type="upstream_error", code="upstream_timeout")
     if status_code == 503:
-        return NightJarError(503, f"Upstream unavailable: {message}", type="upstream_error",
-                             code="upstream_unavailable")
-    return NightJarError(502, f"Upstream error: {message}", type="upstream_error", code="upstream_error")
+        return NightJarError(503, "The upstream provider is temporarily unavailable.", type="upstream_error",
+                             code="upstream_unavailable", headers={"Retry-After": "5"})
+    return NightJarError(502, "The upstream provider returned an error.", type="upstream_error", code="upstream_error")
 
 
 # ── Handlers ────────────────────────────────────────────────────────────────

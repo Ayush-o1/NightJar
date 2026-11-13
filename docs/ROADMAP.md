@@ -68,7 +68,7 @@ Each phase ends with: tests added and passing, `ruff` clean, full suite green, a
 - **Tests:** tool-call boundary, memoization hit, failure fallback, ratio recorded.
 - **Acceptance:** a measured example of tokens before/after with the summarizer stubbed, labeled as such.
 
-### Phase 7 — Reliability
+### Phase 7 — Reliability  ✅ (retry budget and config-driven fallbacks not done)
 - **Problem:** unbounded waits, default cooldown behavior, no retry budget.
 - **Features:** per-request timeout and overall deadline; Router `allowed_fails_policy`/`retry_policy` so auth and bad-request errors neither retry nor cool down; retry budget; global concurrency limit with `503` + `Retry-After`; upstream cancellation on client disconnect; error-message mapping (no raw provider text).
 - **Tests:** against a **local fake upstream** with scripted latency, 429s, 500s, hangs and malformed JSON: retries bounded, fallbacks used, auth error not retried, saturation sheds load, disconnect cancels.

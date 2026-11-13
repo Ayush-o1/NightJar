@@ -49,6 +49,16 @@ class Settings(BaseSettings):
     # Comma-separated allow-list for caller-chosen models (requested model and the override
     # header). Empty = any model. Tier models configured by the operator are always allowed.
     allowed_models: str = ""
+    # --- Upstream reliability ---
+    # Seconds to wait for a provider response (LiteLLM's own default is 6000 s).
+    upstream_timeout_seconds: float = 60.0
+    # Retries per request for rate-limit, timeout and 5xx errors. Auth and bad-request errors are never retried.
+    upstream_retries: int = 2
+    # How long a deployment is removed from rotation after repeated failures.
+    upstream_cooldown_seconds: float = 10.0
+    # Upstream calls allowed at once. Beyond this the gateway answers 503 + Retry-After immediately
+    # instead of queueing without bound.
+    max_concurrent_upstream: int = 128
     # --- Logging ---
     log_level: str = "INFO"
     # --- Storage Paths ---

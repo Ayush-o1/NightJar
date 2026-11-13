@@ -160,3 +160,5 @@ class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = __version__
     redis: str = "unknown"
+    # Provider calls in flight, the limit, and how many requests were shed (503) since start.
+    upstream: dict[str, int] | None = None

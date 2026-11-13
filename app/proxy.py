@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 import litellm
 import structlog
 from litellm import Router
+from litellm.types.router import AllowedFailsPolicy, RetryPolicy
 
 from app import telemetry as tel
 from app.config import Settings
@@ -204,8 +205,11 @@ class ProxyClient:
         self.router = Router(
             model_list=model_list,
             fallbacks=fallbacks,
-            num_retries=2,
-            retry_after=0,                  # don't wait between retries in tests
+            num_retries=settings.upstream_retries,
+            timeout=settings.upstream_timeout_seconds,
+            cooldown_time=settings.upstream_cooldown_seconds,
+            retry_policy=self._retry_policy(settings),
+            allowed_fails_policy=self._allowed_fails_policy(),
             routing_strategy="simple-shuffle",
             set_verbose=False,
         )
@@ -214,6 +218,43 @@ class ProxyClient:
             "proxy.router.initialized",
             deployments=len(model_list),
             fallbacks=len(fallbacks),
+        )
+
+    # ── Failure policy ───────────────────────────────────────────────────
+
+    @staticmethod
+    def _retry_policy(settings: Settings) -> RetryPolicy:
+        """Retry only errors that can succeed on a second try.
+
+        A 401 or a malformed request fails identically every time, so retrying only adds latency.
+        """
+        n = settings.upstream_retries
+        return RetryPolicy(
+            AuthenticationErrorRetries=0,
+            BadRequestErrorRetries=0,
+            ContentPolicyViolationErrorRetries=0,
+            TimeoutErrorRetries=n,
+            RateLimitErrorRetries=n,
+            InternalServerErrorRetries=n,
+        )
+
+    @staticmethod
+    def _allowed_fails_policy() -> AllowedFailsPolicy:
+        """Which errors may put a deployment into cooldown.
+
+        Auth and bad-request errors are the caller's or the operator's mistake, not evidence that
+        the provider is unhealthy, so they never cool a deployment down (the baseline showed one
+        rejected request taking a single-deployment group offline). The big number means "never".
+        Timeouts, rate limits and 5xx do count, three per minute.
+        """
+        never = 1_000_000
+        return AllowedFailsPolicy(
+            AuthenticationErrorAllowedFails=never,
+            BadRequestErrorAllowedFails=never,
+            ContentPolicyViolationErrorAllowedFails=never,
+            TimeoutErrorAllowedFails=3,
+            RateLimitErrorAllowedFails=3,
+            InternalServerErrorAllowedFails=3,
         )
 
     # ── Static builders ──────────────────────────────────────────────────
@@ -332,7 +373,7 @@ class ProxyClient:
         the raw LiteLLM prefix resolver. Falls back to prefix resolution
         for arbitrary user-supplied model strings.
         """
-        registered = {entry["model_name"] for entry in self.router.model_list}
+        registered = set(self.router.get_model_names())
         if model_name in registered:
             return model_name
         return _get_litellm_model(model_name, self.settings)
