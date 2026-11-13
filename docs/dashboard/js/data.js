@@ -1,5 +1,5 @@
 /* ============================================
-   ContextForge — demo dataset
+   NightJar — demo dataset
    ============================================
    Used only when the dashboard can't reach a backend (see
    checkAPIConnection in ui.js), and the connection badge says "Demo data"

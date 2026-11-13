@@ -215,7 +215,7 @@ class TestChatCompletionsWithRouter:
     def test_override_header_forces_model(
         self, test_client, mock_router, mock_proxy_client, mock_cache, chat_completion_fixture, sample_request_body
     ):
-        """X-ContextForge-Model-Override header forces the specified model."""
+        """X-NightJar-Model-Override header forces the specified model."""
         mock_router.route.return_value = RoutingDecision(
             tier=Tier.COMPLEX,
             model_requested="gpt-3.5-turbo",
@@ -229,7 +229,7 @@ class TestChatCompletionsWithRouter:
         resp = test_client.post(
             "/v1/chat/completions",
             json=sample_request_body,
-            headers={"X-ContextForge-Model-Override": "gpt-4o"},
+            headers={"X-NightJar-Model-Override": "gpt-4o"},
         )
 
         assert resp.status_code == 200

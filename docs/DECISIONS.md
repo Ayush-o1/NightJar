@@ -1,5 +1,9 @@
 # Architecture Decision Records
 
+> **Naming note.** This project was called ContextForge until November 2026. ADRs 001–006 below are kept as written, so they still say "ContextForge" and mention
+> `CONTEXTFORGE_API_KEYS`. That variable still works (deprecated alias of `NIGHTJAR_API_KEYS`). Decisions made during the NightJar modernization start at ADR-007.
+> ADR-003 says SQLite is accessed through SQLModel/SQLAlchemy; that was never the case in the code (raw `sqlite3`), and the packages have been removed.
+
 ## ADR-001: FAISS over Qdrant for MVP
 
 **Status:** Accepted  

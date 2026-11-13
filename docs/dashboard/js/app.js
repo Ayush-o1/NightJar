@@ -1,5 +1,5 @@
 /* ============================================
-   ContextForge — app controller
+   NightJar — app controller
    ============================================ */
 
 let _appData = null;
@@ -30,7 +30,7 @@ function navigateTo(pageId) {
 
   const headerTitle = document.getElementById('header-title');
   if (headerTitle) headerTitle.textContent = PAGE_TITLES[pageId] || pageId;
-  document.title = `${PAGE_TITLES[pageId] || pageId} · ContextForge`;
+  document.title = `${PAGE_TITLES[pageId] || pageId} · NightJar`;
 
   _currentPageId = pageId;
 
@@ -303,7 +303,7 @@ function handleExportCSV() {
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
   const a = document.createElement('a');
   a.href = url;
-  a.download = `contextforge-requests-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `nightjar-requests-${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 
@@ -330,12 +330,12 @@ function getApiBaseUrl() {
   return 'http://localhost:8000';
 }
 
-// Only needed when the backend has CONTEXTFORGE_API_KEYS set (auth is off
+// Only needed when the backend has NIGHTJAR_API_KEYS set (auth is off
 // by default). Set one from the console:
-//   localStorage.setItem('contextforge_api_key', 'your-token')
+//   localStorage.setItem('nightjar_api_key', 'your-token')
 function getApiHeaders() {
   let token = null;
-  try { token = localStorage.getItem('contextforge_api_key'); } catch { token = null; }
+  try { token = localStorage.getItem('nightjar_api_key') || localStorage.getItem('contextforge_api_key'); } catch { token = null; }
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 

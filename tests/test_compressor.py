@@ -274,14 +274,14 @@ async def test_metadata_fallback_on_error():
 
 
 def test_no_compress_header_bypasses_compression(test_client, mock_proxy_client, chat_completion_fixture):
-    """When X-ContextForge-No-Compress: true is sent, compressor must not be called."""
+    """When X-NightJar-No-Compress: true is sent, compressor must not be called."""
     mock_proxy_client.forward.return_value = chat_completion_fixture
 
     with patch("app.main.compress_context") as mock_compress:
         resp = test_client.post(
             "/v1/chat/completions",
             json={"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hi"}]},
-            headers={"X-ContextForge-No-Compress": "true"},
+            headers={"X-NightJar-No-Compress": "true"},
         )
 
     assert resp.status_code == 200

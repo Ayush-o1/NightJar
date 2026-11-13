@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, "feature/**"]
   pull_request:
     branches: [main, develop]
 
@@ -14,14 +14,21 @@ jobs:
       OPENAI_API_KEY: "sk-test-ci-key"
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - uses: astral-sh/setup-uv@v6
+      - name: Install (exact versions from uv.lock)
+        run: uv sync --frozen
+      - name: Check requirements.txt is in sync with uv.lock
+        run: |
+          uv export --no-dev --no-hashes --no-emit-project --frozen | grep -v '^#' > /tmp/exported.txt
+          grep -v '^#' requirements.txt > /tmp/committed.txt
+          diff /tmp/exported.txt /tmp/committed.txt
       - name: Lint
-        run: ruff check app/ tests/ benchmarks/
-      - name: Test (mocked suite — live E2E tests are excluded by default, see pyproject.toml)
-        run: PYTHONPATH=. pytest tests/ -v --tb=short
+        run: uv run ruff check app/ tests/ benchmarks/
+      - name: Test (mocked suite; live E2E tests are excluded by default, see pyproject.toml)
+        run: uv run pytest tests/ -v --tb=short
+        env:
+          PYTHONPATH: .
       - name: Benchmark sanity check (dry-run, no server needed)
-        run: PYTHONPATH=. python benchmarks/run_benchmark.py --dry-run
+        run: uv run python benchmarks/run_benchmark.py --dry-run
+        env:
+          PYTHONPATH: .

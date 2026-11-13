@@ -1,8 +1,46 @@
 [project]
-name = "contextforge"
-version = "1.0.0"
-description = "OpenAI-compatible LLM proxy middleware — LiteLLM multi-provider gateway, semantic caching, intelligent routing, and context compression."
+name = "nightjar"
+version = "2.0.0.dev0"
+description = "Self-hosted OpenAI-compatible LLM gateway: safe response caching, opt-in cost routing, context compression, provider failover and per-request telemetry."
+readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.11"
+
+# Ranges here; exact versions live in uv.lock. requirements.txt is exported
+# from the lock for the Docker build (see docs/operations/DEPENDENCIES.md).
+dependencies = [
+    "fastapi>=0.115,<0.116",
+    "uvicorn[standard]>=0.34,<0.35",
+    "pydantic>=2.10,<3",
+    "pydantic-settings>=2.7,<3",
+    "litellm>=1.95,<2",
+    "tiktoken>=0.8",
+    "sentence-transformers>=3.3,<4",
+    "numpy>=1.26",
+    "faiss-cpu>=1.9",
+    "redis>=5.2,<6",
+    "structlog>=24.4",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# Only needed when ENABLE_OTEL=true.
+otel = [
+    "opentelemetry-sdk>=1.20",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.20",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3,<9",
+    "pytest-asyncio>=0.25,<0.26",
+    "httpx>=0.28,<0.29",
+    "ruff>=0.9",
+]
+
+[tool.uv]
+# NightJar is an application, not an installable library.
+package = false
 
 [tool.ruff]
 target-version = "py311"

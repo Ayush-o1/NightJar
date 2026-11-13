@@ -33,9 +33,9 @@ Each phase ends with: tests added and passing, `ruff` clean, full suite green, a
 ### Phase 1 — Product definition and research  ✅
 **Problem:** a feature list with no stated purpose. **Deliverables:** `docs/research/*`, this roadmap. **Done when:** every major design choice cites evidence or says it has none.
 
-### Phase 2 — Rename and foundations
+### Phase 2 — Rename and foundations  ✅
 - **Objective:** one name, reproducible installs, one place for config and version.
-- **Features:** rename per policy above; `pyproject.toml` becomes the dependency source of truth with a lockfile (`uv.lock`) and pinned litellm; drop unused `sqlmodel`/`sqlalchemy`; dev dependencies split from runtime; single version constant; settings cleaned (remove unused `OPENAI_BASE_URL`, one Redis setting); `app/errors.py` (error types → OpenAI-shaped bodies).
+- **Features:** rename per policy above; `pyproject.toml` becomes the dependency source of truth with a lockfile (`uv.lock`) and pinned litellm; drop unused `sqlmodel`/`sqlalchemy`; dev dependencies split from runtime; single version constant; settings cleaned (remove unused `OPENAI_BASE_URL`; the two Redis settings are reconciled in Phase 5 when the LiteLLM exact cache is replaced).
 - **Architecture:** none beyond module layout: `app/` stays flat, new modules arrive with the phase that needs them.
 - **API:** header/env aliases above. **DB:** none. **Frontend:** title and text only.
 - **Risks:** litellm pin breaks something → run the suite on the pinned version before committing.
@@ -43,7 +43,7 @@ Each phase ends with: tests added and passing, `ruff` clean, full suite green, a
 
 ### Phase 3 — Core API and request lifecycle
 - **Problem:** audit A-1, E-1, E-2, validation gaps, no request IDs.
-- **Features:** pure-ASGI middleware (request ID, body size limit with 413, timing); OpenAI-shaped error responses for validation, auth, upstream and unexpected errors; `content` accepts string or part lists; `messages` must be non-empty; character budget before tokenization; CPU-bound work off the event loop; streaming errors become in-band SSE `error` events; `X-Request-ID` on every response.
+- **Features:** `app/errors.py` (error types → OpenAI-shaped bodies); pure-ASGI middleware (request ID, body size limit with 413, timing); OpenAI-shaped error responses for validation, auth, upstream and unexpected errors; `content` accepts string or part lists; `messages` must be non-empty; character budget before tokenization; CPU-bound work off the event loop; streaming errors become in-band SSE `error` events; `X-Request-ID` on every response.
 - **API:** error body is `{"error": {"message","type","param","code"}}` everywhere. Validation errors change from FastAPI's `detail` to this shape: **breaking for clients that parse `detail`**; documented.
 - **Tests:** 1 MB hostile input returns 413 and `/health` stays responsive; malformed JSON, empty messages, list content, streaming mid-stream failure, unexpected exception.
 - **DoD:** the baseline's 10 MB probe is rerun and no longer stalls the server (bounded size reproduced, not the 10 MB case, to avoid hanging the check).

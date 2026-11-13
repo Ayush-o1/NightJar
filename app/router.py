@@ -174,7 +174,7 @@ class ModelRouter:
         Args:
             model_requested: The model specified in the original request.
             messages: The conversation messages.
-            override_model: If set via X-ContextForge-Model-Override header,
+            override_model: If set via X-NightJar-Model-Override header,
                           forces this model regardless of classification.
 
         Returns:

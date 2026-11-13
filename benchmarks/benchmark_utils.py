@@ -1,4 +1,4 @@
-"""Benchmark utility functions for ContextForge.
+"""Benchmark utility functions for NightJar.
 
 Extracted into a separate module so they can be tested by pytest without
 requiring a live server.

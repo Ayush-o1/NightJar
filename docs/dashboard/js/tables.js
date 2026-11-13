@@ -1,11 +1,11 @@
 /* ============================================
-   ContextForge — table rendering
+   NightJar — table rendering
    ============================================ */
 
 // ─── ESCAPING ────────────────────────────────────────────────
 // model/tier/routing_reason originate from request data the *caller*
 // controls (the chat completions body, and — for model_used — the
-// X-ContextForge-Model-Override header), not from the dashboard's own
+// X-NightJar-Model-Override header), not from the dashboard's own
 // state. Everything dynamic is escaped before it goes into innerHTML so
 // {"model": "<img src=x onerror=…>"} renders as inert text in the log
 // instead of running in whoever is viewing this.
