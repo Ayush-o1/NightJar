@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     # Deprecated: the pre-rename name (CONTEXTFORGE_API_KEYS). Still read so
     # existing deployments keep working; remove in the next minor release.
     contextforge_api_keys: str = ""
+    # --- Request limits ---
+    # Hard cap on the request body, enforced before the body is read (413).
+    max_request_bytes: int = 8 * 1024 * 1024
+    # Cap on characters of *text* across all messages (400, context_length_exceeded).
+    # Image/audio payloads don't count; they are not tokenized or embedded.
+    max_prompt_chars: int = 2_000_000
     # --- CORS ---
     # Comma-separated list of allowed origins, or "*" for any origin.
     # Credentialed CORS (cookies) is never enabled here — this gateway is

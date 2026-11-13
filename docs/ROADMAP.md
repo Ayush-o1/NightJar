@@ -41,7 +41,7 @@ Each phase ends with: tests added and passing, `ruff` clean, full suite green, a
 - **Risks:** litellm pin breaks something → run the suite on the pinned version before committing.
 - **Acceptance:** `grep -ri contextforge` returns only intentional compatibility code and historical docs; `uv sync` reproduces the environment; deprecated names still work (tested).
 
-### Phase 3 — Core API and request lifecycle
+### Phase 3 — Core API and request lifecycle  ✅
 - **Problem:** audit A-1, E-1, E-2, validation gaps, no request IDs.
 - **Features:** `app/errors.py` (error types → OpenAI-shaped bodies); pure-ASGI middleware (request ID, body size limit with 413, timing); OpenAI-shaped error responses for validation, auth, upstream and unexpected errors; `content` accepts string or part lists; `messages` must be non-empty; character budget before tokenization; CPU-bound work off the event loop; streaming errors become in-band SSE `error` events; `X-Request-ID` on every response.
 - **API:** error body is `{"error": {"message","type","param","code"}}` everywhere. Validation errors change from FastAPI's `detail` to this shape: **breaking for clients that parse `detail`**; documented.

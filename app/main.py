@@ -17,16 +17,26 @@ from app import __version__
 from app import telemetry as tel
 from app.adaptive import ThresholdManager, get_active_threshold
 from app.api.admin import router as admin_router
+from app.asgi import RequestContextMiddleware
 from app.auth import require_api_key
 from app.cache import SemanticCache
 from app.compat import get_header
 from app.compressor import compress_context
 from app.config import Settings, get_settings
 from app.embedder import Embedder
+from app.errors import (
+    NightJarError,
+    context_too_large,
+    from_upstream,
+    install_error_handlers,
+    redact_secrets,
+    sse_error_event,
+)
 from app.middleware import TelemetryMiddleware
 from app.models import ChatCompletionRequest, HealthResponse
 from app.proxy import ProxyClient, UpstreamError
 from app.router import ModelRouter
+from app.tokens import total_text_chars
 from app.vector_store import VectorStore
 
 logger = structlog.get_logger()
@@ -128,6 +138,7 @@ app = FastAPI(
 
 # ─── Middleware (order matters: first added = outermost) ─────────────────
 # TelemetryMiddleware MUST be registered to write per-request telemetry.
+# Added first => innermost; RequestContextMiddleware (added last) is outermost.
 app.add_middleware(TelemetryMiddleware)
 
 _settings_for_cors = get_settings()
@@ -141,6 +152,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Outermost: assigns the request id, enforces the body limit, catches anything unhandled.
+app.add_middleware(RequestContextMiddleware, max_body_bytes=_settings_for_cors.max_request_bytes)
+install_error_handlers(app)
 
 # ─── Mount static dashboard at /dashboard ────────────────────────────────
 _dashboard_dir = Path(__file__).resolve().parent.parent / "docs" / "dashboard"
@@ -205,6 +219,10 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
     try:
         messages_dicts = [m.model_dump(exclude_none=True) for m in body.messages]
 
+        text_chars = total_text_chars(messages_dicts)
+        if text_chars > settings.max_prompt_chars:
+            raise context_too_large(text_chars, settings.max_prompt_chars)
+
         # --- Model routing ---
         override_model = get_header(request, "model-override")
         routing = router.route(body.model, messages_dicts, override_model=override_model)
@@ -214,17 +232,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
 
         # Streaming bypasses cache and compression
         if body.stream:
-            return StreamingResponse(
-                proxy_client.forward_stream(body, model_override=routing.model_selected),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no",
-                    "X-Model-Tier": routing.tier.value,
-                    "X-Model-Selected": routing.model_selected,
-                },
-            )
+            return await _stream_response(proxy_client, body, routing)
 
         # --- Context compression ---
         no_compress = get_header(request, "no-compress") == "true"
@@ -295,24 +303,65 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
         )
 
     except UpstreamError as exc:
-        logger.warning("upstream.error", status_code=exc.status_code, detail=exc.detail)
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={
-                "error": {
-                    "message": exc.detail,
-                    "type": "upstream_error",
-                    "code": str(exc.status_code),
-                }
-            },
+        logger.warning(
+            "upstream.error", request_id=getattr(request.state, "request_id", None),
+            status_code=exc.status_code, detail=redact_secrets(exc.detail)[:300],
         )
+        raise from_upstream(exc.status_code, exc.detail) from exc
+
+
+async def _stream_response(proxy_client: ProxyClient, body: ChatCompletionRequest, routing) -> StreamingResponse:
+    """Start the upstream stream, then hand back an SSE response.
+
+    The first chunk is awaited *before* the response is created. Failures that happen while
+    connecting (bad key, unknown model, rate limit, cooldown) therefore still produce a real
+    HTTP error status. Once bytes are on the wire the status can't change, so a later failure
+    is sent in-band as an ``error`` event, which the OpenAI SDKs raise as an exception.
+    """
+    stream = proxy_client.forward_stream(body, model_override=routing.model_selected)
+    try:
+        first = await stream.__anext__()
+    except StopAsyncIteration:
+        first = None
+    except UpstreamError as exc:
+        raise from_upstream(exc.status_code, exc.detail) from exc
+
+    async def events() -> AsyncGenerator[str, None]:
+        try:
+            if first is not None:
+                yield first
+            async for chunk in stream:
+                yield chunk
+        except UpstreamError as exc:
+            yield sse_error_event(from_upstream(exc.status_code, exc.detail))
+        except Exception as exc:  # noqa: BLE001 - nothing else can be done once streaming started
+            logger.error("stream.interrupted", reason=redact_secrets(str(exc))[:300])
+            yield sse_error_event(NightJarError(
+                502, "The upstream stream was interrupted.", type="upstream_error", code="stream_interrupted",
+            ))
+        finally:
+            aclose = getattr(stream, "aclose", None)
+            if aclose is not None:
+                await aclose()
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "X-Model-Tier": routing.tier.value,
+            "X-Model-Selected": routing.model_selected,
+        },
+    )
 
 
 # ─────────────────── Telemetry Endpoints ─────────────────────────────────
 
 
 @app.get("/v1/telemetry", dependencies=[Depends(require_api_key)])
-async def get_telemetry(limit: int = 50, offset: int = 0):
+async def get_telemetry(limit: int = Query(default=50, ge=1, le=500), offset: int = Query(default=0, ge=0)):
     return {"records": tel.get_records(limit, offset), "limit": limit, "offset": offset}
 
 

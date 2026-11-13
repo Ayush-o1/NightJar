@@ -12,8 +12,9 @@ from enum import Enum
 from pathlib import Path
 
 import structlog
-import tiktoken
 import yaml
+
+from app.tokens import content_to_text, count_text_tokens
 
 logger = structlog.get_logger()
 
@@ -106,18 +107,14 @@ class ModelRouter:
         return config
 
     def count_tokens(self, text: str, model: str = "gpt-3.5-turbo") -> int:
-        """Count tokens using tiktoken with model-specific encoding."""
-        try:
-            encoding = tiktoken.encoding_for_model(model)
-        except KeyError:
-            encoding = tiktoken.get_encoding("cl100k_base")
-        return len(encoding.encode(text))
+        """Count tokens; exact for ordinary sizes, estimated for very large text (see app/tokens.py)."""
+        return count_text_tokens(text, model)
 
     def _flatten_messages(self, messages: list[dict]) -> str:
         """Flatten messages list into a single text string for analysis."""
         parts = []
         for msg in messages:
-            content = msg.get("content", "") or ""
+            content = content_to_text(msg.get("content"))
             if content:
                 parts.append(content)
         return "\n".join(parts)

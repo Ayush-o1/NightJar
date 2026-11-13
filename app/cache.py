@@ -12,6 +12,7 @@ Flow:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 
@@ -72,7 +73,8 @@ class SemanticCache:
         )
 
         text = self._embedder.messages_to_text(messages)
-        vector = self._embedder.embed(text)
+        # Embedding is CPU-bound; keep it off the event loop so other requests keep moving.
+        vector = await asyncio.to_thread(self._embedder.embed, text)
 
         # Search for nearest neighbor
         results = self._vector_store.search(vector, k=1)
@@ -121,7 +123,8 @@ class SemanticCache:
         """
         cache_key = self._embedder.content_hash(model, messages)
         text = self._embedder.messages_to_text(messages)
-        vector = self._embedder.embed(text)
+        # Embedding is CPU-bound; keep it off the event loop so other requests keep moving.
+        vector = await asyncio.to_thread(self._embedder.embed, text)
 
         # Store in Redis with TTL. Best-effort: if Redis is unreachable, still
         # index the vector — a later lookup will find it in FAISS, miss on the

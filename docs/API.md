@@ -20,7 +20,7 @@ Disabled by default. If `NIGHTJAR_API_KEYS` is set (see `.env.example`), every e
 Authorization: Bearer <token>
 ```
 
-using one of the configured tokens. A missing or invalid token returns `401` with a `WWW-Authenticate: Bearer` header. This is separate from the upstream provider keys (`OPENAI_API_KEY`, etc.) — it authenticates the caller to NightJar, not NightJar to the LLM provider.
+using one of the configured tokens. A missing or invalid token returns `401` (OpenAI-shaped error body) with a `WWW-Authenticate: Bearer` header. This is separate from the upstream provider keys (`OPENAI_API_KEY`, etc.) — it authenticates the caller to NightJar, not NightJar to the LLM provider.
 
 ---
 
@@ -112,11 +112,49 @@ All caching, routing, compression, and telemetry features work transparently reg
 | `X-NightJar-Model-Override` | Force a specific model, bypassing the router (e.g., `gpt-4o`) |
 | `X-NightJar-No-Compress` | Set to `true` to skip context compression for this request |
 
+### Request limits
+
+| Limit | Default | Setting | Response |
+|---|---|---|---|
+| Request body size | 8 MiB | `MAX_REQUEST_BYTES` | `413`, code `request_too_large` |
+| Characters of text across all messages | 2,000,000 | `MAX_PROMPT_CHARS` | `400`, code `context_length_exceeded` |
+| `messages` | at least 1 | | `400` |
+| `temperature` / `top_p` / `n` | 0–2 / 0–1 / 1–16 | | `400` |
+
+Message `content` may be a string, a list of parts (`{"type":"text",...}`, `{"type":"image_url",...}`), or null (assistant messages that only carry `tool_calls`). Image and audio parts are forwarded but are not tokenized, embedded, or counted against the text budget.
+
+Every response carries `X-Request-ID`. Send your own `X-Request-ID` (letters, digits, `.`, `_`, `-`, up to 64 characters) to have it used instead; anything else is replaced.
+
 ### Notes
 
-- When `stream=true`, the response is returned as Server-Sent Events (SSE). Streaming requests bypass both caching and compression.
-- On cache hit, no upstream API call is made — the cached response is returned directly with `X-Cache-Hit: true`.
-- Upstream errors (429, 500, 502, etc.) are propagated to the client with the original status code and error body.
+- When `stream=true`, the response is Server-Sent Events. Streaming requests bypass caching and compression.
+- Failures **before** the first chunk (bad model, rate limit, provider down) return an ordinary HTTP error. A failure **after** the stream has started can't change the status code, so it arrives as a final `data: {"error": {...}}` event and **no** `data: [DONE]`. OpenAI SDKs raise on that event.
+- On a cache hit no upstream call is made. The response carries `X-Cache: HIT` and `X-Similarity`; a miss carries `X-Cache: MISS`.
+
+---
+
+## Errors
+
+Every error, from every endpoint, has the OpenAI shape:
+
+```json
+{"error": {"message": "...", "type": "invalid_request_error", "param": "messages", "code": "invalid_request"}}
+```
+
+| Status | `type` | When |
+|---|---|---|
+| 400 | `invalid_request_error` | Validation failed (`param` names the field), invalid JSON (`code: invalid_json`), prompt over budget, or the provider rejected the request (`code: upstream_invalid_request`) |
+| 401 | `authentication_error` | Missing/invalid NightJar API key. `WWW-Authenticate: Bearer` is set. |
+| 404 | `invalid_request_error` | Unknown route, or unknown model upstream (`code: model_not_found`) |
+| 413 | `invalid_request_error` | Body over `MAX_REQUEST_BYTES` |
+| 429 | `rate_limit_error` | The provider rate-limited the request |
+| 500 | `server_error` | Bug in NightJar. The message contains the request ID to report. |
+| 502 | `upstream_error` | Provider failed (`upstream_error`), or **provider rejected NightJar's own credentials** (`upstream_auth_error`) |
+| 503 / 504 | `upstream_error` | Provider unavailable / timed out |
+
+A provider's 401/403 is reported as **502**, never 401: it means the gateway's provider key is wrong, not that the caller's NightJar key was rejected. Provider error text is truncated to 500 characters and credential-looking strings are replaced with `[REDACTED]`.
+
+**Changed in 2.0:** validation errors used FastAPI's `{"detail": [...]}` body with status 422; they are now 400 with the shape above. Upstream 5xx used to be passed through with the provider's status; they are now 502. The `code` of upstream errors used to be the status code as a string (`"429"`); it is now a descriptive code.
 
 ---
 
@@ -148,7 +186,7 @@ Returns paginated telemetry records, newest first. All data is stored locally in
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `limit` | int | 50 | Maximum records to return |
+| `limit` | int | 50 | Maximum records to return (1–500) |
 | `offset` | int | 0 | Number of records to skip |
 
 ### Response

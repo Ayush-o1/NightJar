@@ -153,3 +153,27 @@ If ContextForge needs to support many distinct callers with different quotas or 
 - **One source of truth:** marker + `addopts` in `pyproject.toml` can't drift between workflow files the way two hand-written `-k`/`-m` flags did
 - **Fails safe, not silent:** a future CI env var change can no longer accidentally re-enable live calls, because the marker default doesn't depend on any specific env var
 - **Defense in depth:** the state-cleanup `finally` block means the isolation doesn't depend solely on remembering the marker filter every time
+
+---
+
+## ADR-007: OpenAI-shaped errors, 400 for validation, 502 for provider failures
+
+**Status:** Accepted (NightJar 2.0) · **Date:** 2026-11-13
+
+### Problem
+Validation errors came back as FastAPI's `{"detail": [...]}` with status 422, unexpected exceptions as a bare `Internal Server Error`, and provider failures were passed through with the provider's own status and text. A provider 401 reached callers as a 401, which tells them their own key is wrong. A client library that parses the OpenAI `error` object could not read most of NightJar's errors, and a mid-stream failure produced a truncated stream plus a server traceback.
+
+### Decision
+One error shape (`{"error": {message, type, param, code}}`) for every error. Validation → 400 `invalid_request_error`. Provider failures are translated (`app/errors.py:from_upstream`): 401/403 → 502, 5xx → 502, timeout → 504, 429 → 429. Errors after a stream has started are in-band SSE `error` events. Provider text is redacted and truncated.
+
+### Why this and not the alternatives
+- *Keep 422 and only change the body:* smaller break, but OpenAI uses 400 for invalid requests and the point is to be a drop-in endpoint. The status code is the part clients branch on (retry logic); 400 is the one they already treat as "don't retry".
+- *Pass provider statuses through unchanged:* simplest, and what the old code did, but it makes a gateway configuration fault indistinguishable from a caller fault.
+- *Hide all provider detail:* safest, but a "model not found" or "context too long" message is exactly what the caller needs. Truncation plus redaction keeps the useful part.
+
+### Costs
+Breaking for any client that parsed `detail` or expected 422/`"429"` codes. Documented in `docs/API.md` under *Errors*. Six existing tests asserted the old behavior and were updated deliberately.
+
+### Interview framing
+"A gateway has two kinds of failure, the caller's and its own, and they need different status codes. I mapped provider 401s to 502 because returning 401 would make the caller rotate a key that was fine."
+

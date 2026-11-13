@@ -242,5 +242,5 @@ class TestThresholdEndpoints:
         assert len(resp.json()["records"]) == 2
 
     def test_history_endpoint_rejects_bad_limit(self, endpoint_client):
-        assert endpoint_client.get("/v1/threshold/history?limit=0").status_code == 422
-        assert endpoint_client.get("/v1/threshold/history?limit=9999").status_code == 422
+        assert endpoint_client.get("/v1/threshold/history?limit=0").status_code == 400
+        assert endpoint_client.get("/v1/threshold/history?limit=9999").status_code == 400

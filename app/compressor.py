@@ -13,9 +13,8 @@ from __future__ import annotations
 
 import logging
 
-import tiktoken
-
 from app.config import Settings
+from app.tokens import content_to_text, count_message_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -34,19 +33,8 @@ _SUMMARY_MARKER = "[SUMMARY OF EARLIER CONVERSATION]"
 
 
 def count_tokens(messages: list[dict], model: str = "gpt-3.5-turbo") -> int:
-    """Count total tokens across all messages using tiktoken.
-
-    Adds 4 tokens per message to match the OpenAI chat format overhead
-    (role + separators).  Falls back to cl100k_base for unknown models.
-    """
-    try:
-        enc = tiktoken.encoding_for_model(model)
-    except KeyError:
-        enc = tiktoken.get_encoding("cl100k_base")
-    total = 0
-    for msg in messages:
-        total += len(enc.encode(msg.get("content", "") or "")) + 4
-    return total
+    """Total tokens across messages (bounded per message, includes tool calls; see app/tokens.py)."""
+    return count_message_tokens(messages, model)
 
 
 # ─── Compression trigger ──────────────────────────────────────────────────
@@ -100,7 +88,7 @@ def _split_messages(
 def _format_turns_for_summary(turns: list[dict]) -> str:
     """Render a list of message dicts as a readable turn-by-turn transcript."""
     return "\n".join(
-        f"{m['role'].upper()}: {m.get('content', '')}" for m in turns
+        f"{m['role'].upper()}: {content_to_text(m.get('content'))}" for m in turns
     )
 
 
