@@ -10,7 +10,7 @@ Branch: `feature/nightjar-modernization` (from `main` @ `1a4819c`). Not merged t
 | 3 Core API and request lifecycle | Done | Pure-ASGI request context (IDs, 413 limits, 500 safety net); OpenAI-shaped errors everywhere; multimodal `content`; bounded tokenization; in-band streaming errors; telemetry latency now covers streams. 244 tests pass (175 original, 69 new). |
 | 4 Routing and provider layer | Partly done | Routing is now opt-in (`explicit` default; alias `nightjar/auto`; `always`/`off`), shadow decisions recorded, whole-word/prefix keyword matching, scan bounded, `ALLOWED_MODELS` allow-list. 276 tests pass. **Moved to Phase 7:** config-driven deployments/fallback chains and the `Router.model_list` deprecation, since they are the same code as the reliability work. |
 | 5 Cache correctness | Done | Exact tier + partitioned, guarded, opt-in semantic tier; request fingerprint; eligibility rules; single-flight; numpy vector index replaces FAISS (ADR-009); adaptive threshold removed (ADR-008); measured false-hit rates published. 364 tests pass (cache tests run against real Redis). |
-| 6 Context compression | Not started | |
+| 6 Context compression | Done | Tool-call-safe splitting (a `tool` reply is never separated from its assistant call), per-conversation summary memoisation (bounded LRU), empty summaries rejected, runs on the miss path only (from Phase 5). 375 tests pass. |
 | 7 Reliability | Not started | |
 | 8 Database and telemetry | Not started | |
 | 9 Security and access | Not started | |
@@ -47,5 +47,8 @@ Branch: `feature/nightjar-modernization` (from `main` @ `1a4819c`). Not merged t
 - **Phase 5 deliberate test removals:** `test_adaptive.py` (feature removed), `test_cache.py` and `test_cache_invalidation.py` (tested the FAISS-based cache; replaced by `test_response_cache.py`, `test_cache_pipeline.py`, `test_vector_index.py`, `test_fingerprint.py`, `test_guards.py`), and the LiteLLM built-in-cache tests in `test_failover.py` (that redundant layer was removed). `faiss-cpu` is no longer a dependency; the embedder runs without `KMP_DUPLICATE_LIB_OK`.
 - **Breaking in 2.0 from Phase 5:** `/v1/threshold*` answer 410; env vars `ENABLE_CACHE`, `REDIS_HOST/PORT/PASSWORD`, `FAISS_INDEX_PATH`, `ADAPTIVE_THRESHOLD_*` are gone (unknown env vars are ignored, so old `.env` files still load); the old `data/faiss.index*` files are unused; redis keys are now `nj:v2:r:*` (old `cache:*` keys are ignored and expire or can be deleted).
 - **Open after Phase 5:** compression's tool-call safety and memoization (Phase 6); sentence-transformers/torch is still a hard dependency even though the model only loads when the semantic tier is on (Phase 13 makes it an extra and measures the image size).
+
+- **Phase 6 not measured:** the token saving from compression was not measured with a real summariser (needs a provider or a fake that returns realistic summaries), so no saving is claimed. The summary is still inserted with `role: user` and delimited by a marker; I have not checked how every provider treats two consecutive user turns, so that remains an assumption.
+- **Phase 6 test isolation:** the summary memo is process-global state, so `tests/conftest.py` clears it before every test (an existing compressor test failed from a leaked memo before this was added).
 
 Updated after each phase.

@@ -62,7 +62,7 @@ Each phase ends with: tests added and passing, `ruff` clean, full suite green, a
 - **Tests:** against real Redis and real FAISS (integration) plus unit tests; concurrent-miss test asserts one upstream call; the baseline's false-hit pairs are regression tests.
 - **Acceptance:** none of the baseline false-hit pairs served at default settings, or the ones that still are (unit-order swaps) are listed in the docs as known limits.
 
-### Phase 6 — Context compression
+### Phase 6 — Context compression  ✅
 - **Problem:** C-4, C-8.
 - **Features:** compression runs *after* cache lookup, on the miss path only; never splits an assistant `tool_calls` message from its `tool` replies; token counts include tool calls; summary memoized per conversation prefix; summary clearly delimited; failure falls back to uncompressed; compression off for requests with tools unless opted in.
 - **Tests:** tool-call boundary, memoization hit, failure fallback, ratio recorded.

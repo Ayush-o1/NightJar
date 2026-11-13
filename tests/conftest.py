@@ -36,6 +36,14 @@ def _init_telemetry_db() -> None:
     tel.init_db()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_summary_memo() -> None:
+    """The compressor memoises summaries in process memory; never let one test's summary leak into another."""
+    from app.compressor import clear_summary_memo
+
+    clear_summary_memo()
+
+
 @pytest.fixture
 def fixture_dir() -> Path:
     """Return the path to the fixtures directory."""
