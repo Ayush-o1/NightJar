@@ -1,5 +1,6 @@
 """Pydantic Settings configuration loaded from .env file."""
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings
 
@@ -70,15 +71,16 @@ class Settings(BaseSettings):
     enable_otel: bool = False                            # set True in .env to activate
     otel_endpoint: str = "http://localhost:4317"         # OTLP gRPC collector endpoint
     # --- Gateway Authentication ---
-    # Comma-separated list of accepted bearer tokens for calls to this gateway
-    # (checked against the `Authorization: Bearer <token>` header, distinct
-    # from the upstream provider keys above). Empty = auth disabled, which is
-    # the right default for local single-user development. Set this before
-    # exposing NightJar beyond localhost.
+    # Comma-separated bearer tokens (full access: chat + admin). Prefer per-key records with scopes and
+    # limits: `python -m app.keys create ...`. These "env keys" are the simple option.
     nightjar_api_keys: str = ""
     # Deprecated: the pre-rename name (CONTEXTFORGE_API_KEYS). Still read so
     # existing deployments keep working; remove in the next minor release.
     contextforge_api_keys: str = ""
+    # auto: enforce auth once any key exists. required: always. off: never (explicit opt-out).
+    nightjar_auth: Literal["auto", "required", "off"] = "auto"
+    # Requests per minute allowed per caller when the caller's own key has no limit. 0 = unlimited.
+    default_rate_limit_rpm: int = 0
     # --- Request limits ---
     # Hard cap on the request body, enforced before the body is read (413).
     max_request_bytes: int = 8 * 1024 * 1024
@@ -86,11 +88,12 @@ class Settings(BaseSettings):
     # Image/audio payloads don't count; they are not tokenized or embedded.
     max_prompt_chars: int = 2_000_000
     # --- CORS ---
-    # Comma-separated list of allowed origins, or "*" for any origin.
+    # Comma-separated allowed origins for browser apps calling the gateway directly, or "*" for any.
+    # Empty (default) allows none: the bundled dashboard is same-origin and does not need CORS.
     # Credentialed CORS (cookies) is never enabled here — this gateway is
     # authenticated via bearer token, not cookies, so wildcard origins are
     # safe without allow_credentials.
-    cors_allow_origins: str = "*"
+    cors_allow_origins: str = ""
 
     @property
     def api_keys(self) -> list[str]:

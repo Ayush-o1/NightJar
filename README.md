@@ -145,8 +145,9 @@ Every variable is documented inline in [`.env.example`](.env.example). The ones 
 | `COMPRESS_MIN_TURNS` | `6` | Minimum turns before compression applies |
 | `SEMANTIC_CACHE` | `false` | Enable the semantic tier (see correctness report) |
 | `CACHE_MAX_TEMPERATURE` | `1.0` | Requests above this temperature are never cached |
-| `NIGHTJAR_API_KEYS` | `""` | Comma-separated bearer tokens. Empty = auth off (local-dev default) |
-| `CORS_ALLOW_ORIGINS` | `*` | Allowed origins; credentialed CORS is never enabled |
+| `NIGHTJAR_AUTH` | `auto` | `auto`: enforce once any key exists; `required`: always; `off`: never |
+| `NIGHTJAR_API_KEYS` | `""` | Comma-separated full-access bearer tokens (simple option; prefer `python -m app.keys`) |
+| `CORS_ALLOW_ORIGINS` | `""` | Allowed browser origins (default none; was `*` before 2.0). Credentialed CORS is never enabled |
 | `ROUTING_MODE` | `explicit` | `explicit`: honour the requested model, route only for `nightjar/auto`; `always`: route every request; `off`: never switch |
 | `ALLOWED_MODELS` | `""` | Comma-separated models callers may request/override to. Empty = any |
 | `MAX_REQUEST_BYTES` | `8388608` | Request body limit (`413` above it) |
@@ -173,7 +174,7 @@ Every variable is documented inline in [`.env.example`](.env.example). The ones 
 
 Schemas and examples: [docs/API.md](docs/API.md).
 
-**Auth is off by default.** Set `NIGHTJAR_API_KEYS` and every endpoint except `/health` requires `Authorization: Bearer <token>`. Do that before exposing this beyond localhost — it's a proxy holding your provider keys.
+**Auth:** with no keys configured a local install is open (convenient on localhost); as soon as any key exists, every endpoint except `/health` requires `Authorization: Bearer <key>`. Create scoped keys with `uv run python -m app.keys create --name app --scopes chat --rpm 60`. The Docker image runs with `NIGHTJAR_AUTH=required`, so a container with no keys refuses requests instead of serving them to anyone. Details: [docs/architecture/SECURITY_MODEL.md](docs/architecture/SECURITY_MODEL.md).
 
 ---
 
@@ -243,7 +244,7 @@ python benchmarks/run_benchmark.py --dry-run   # no server required
 - **Compression costs a call.** Summarizing older turns is itself an LLM request, so it only pays off on genuinely long conversations — hence the token *and* turn-count gates.
 - **Costs in `telemetry` are estimates** from a static per-model table that goes stale as providers change pricing. `request_log` has the real numbers.
 - **One similarity threshold** for the semantic tier, not per-model or per-tenant, and the tier cannot be made fully safe (see the correctness report).
-- **No rate limiting or per-key quotas.** The auth layer is a flat token list, not an identity system.
+- **Limited access control.** Scoped keys, per-key model lists and request-rate limits exist; per-key spend limits, cache tenant isolation and a shared (multi-process) rate limiter do not. See the security model.
 
 ---
 

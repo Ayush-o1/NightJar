@@ -13,7 +13,7 @@ Branch: `feature/nightjar-modernization` (from `main` @ `1a4819c`). Not merged t
 | 6 Context compression | Done | Tool-call-safe splitting (a `tool` reply is never separated from its assistant call), per-conversation summary memoisation (bounded LRU), empty summaries rejected, runs on the miss path only (from Phase 5). 375 tests pass. |
 | 7 Reliability | Mostly done | Explicit timeout (default 60 s; LiteLLM's default is 6000 s), error-class retry and cooldown policy, concurrency limit with 503 + Retry-After, fixed messages for server-side upstream errors, client-disconnect cancellation verified. **Not done:** retry budget; config-driven deployments/fallbacks. 400 tests pass (tests use a fake provider over real HTTP). |
 | 8 Database and telemetry | Not started | |
-| 9 Security and access | Not started | |
+| 9 Security and access | Mostly done | Auth modes (`auto`/`required`/`off`; Docker sets `required`), hashed scoped keys + CLI, per-key model allow-list and rate limit, admin scope, CORS closed by default, attribution by key name. 429 tests pass. **Not done:** per-key spend limits, cache tenant isolation, shared rate limiter, audit log, persisting key name in telemetry (Phase 8). |
 | 10 Dashboard | Not started | |
 | 11 Performance and benchmarking | Not started | |
 | 12 Testing and quality | Not started | |
@@ -55,5 +55,11 @@ Branch: `feature/nightjar-modernization` (from `main` @ `1a4819c`). Not merged t
 - **Phase 7 not done, stated plainly:** gateway-level retry budget; fallback chains and model names still in code and possibly out of date; the `fallbacks:`/`provider_preference:` YAML sections are still unread.
 
 - **Test isolation bug found in Phase 7:** `ProxyClient` copies provider keys into `os.environ`, and `app.state` is a shared singleton, so earlier tests leaked fake Anthropic/Gemini keys and a Redis client into later ones; a later test then built fallbacks and made real outbound calls to those providers with fake keys (they failed authentication, but traffic should never leave the machine from a unit test). `tests/conftest.py` now restores `os.environ` and `app.state` after every test.
+
+- **Phase 9 verified live** with a real key lifecycle: no key → 401 (health 200); chat key → chat 200 / telemetry 403; admin key → telemetry 200 / chat 403; a 5/min key gets 429 + `Retry-After` on the 6th call; a revocation from the CLI (a separate process) took effect after the 30 s lookup cache; a cross-origin preflight is refused by default.
+- **Phase 9 breaking changes:** `CORS_ALLOW_ORIGINS` default `*` → none; `/admin/*` and cache/telemetry endpoints need the `admin` scope (env keys have it); chat-only keys cannot reach them. One existing test (`test_cors_origins_default_wildcard`) was updated to the new default.
+- **Phase 9 caveat:** a cached response is served to any caller with an identical request (no per-key cache partition). That is documented in the security model, with `X-NightJar-Cache: bypass` as the escape hatch.
+
+- **A second documented-variable bug, caught by the `.env.example` test:** the auth setting was named `auth` (env `AUTH`) while the docs and `Dockerfile` used `NIGHTJAR_AUTH`, so "secure by default in Docker" would have been false. My first live check missed it because keys existed in the database, which made `auto` mode enforce anyway. Renamed to `nightjar_auth`, and added tests that the env var alone enforces auth with zero keys and that the Dockerfile's variable is a real setting; re-verified live. Lesson recorded: a live check must isolate the variable it claims to test.
 
 Updated after each phase.

@@ -14,13 +14,16 @@ http://localhost:8000
 
 ## Authentication
 
-Disabled by default. If `NIGHTJAR_API_KEYS` is set (see `.env.example`), every endpoint below except `GET /health` requires:
+Send `Authorization: Bearer <key>`. Keys come from `python -m app.keys create --name <name> --scopes chat[,admin] [--rpm N] [--models a,b]` (stored hashed, shown once) or from the `NIGHTJAR_API_KEYS` environment variable (full access, the simple option).
 
-```
-Authorization: Bearer <token>
-```
+`NIGHTJAR_AUTH` controls enforcement: `auto` (default; enforced as soon as any key exists, open on a fresh local install), `required` (always; the Docker image sets it), `off` (explicit opt-out). `GET /health` never needs a key.
 
-using one of the configured tokens. A missing or invalid token returns `401` (OpenAI-shaped error body) with a `WWW-Authenticate: Bearer` header. This is separate from the upstream provider keys (`OPENAI_API_KEY`, etc.) — it authenticates the caller to NightJar, not NightJar to the LLM provider.
+| Scope | Allows |
+|---|---|
+| `chat` | `POST /v1/chat/completions` |
+| `admin` | `/v1/telemetry*`, `/v1/cache*`, `/admin/*` |
+
+A wrong or missing key is `401` with `WWW-Authenticate: Bearer`; a key without the needed scope is `403 insufficient_scope`; a per-key request limit is `429 rate_limit_exceeded` with `Retry-After`; a model outside the key's or the gateway's allow-list is `403 model_not_allowed`. This is separate from the provider keys (`OPENAI_API_KEY` etc.), which authenticate NightJar to the providers.
 
 ---
 

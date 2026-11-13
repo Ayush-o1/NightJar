@@ -80,7 +80,7 @@ Each phase ends with: tests added and passing, `ruff` clean, full suite green, a
 - **Tests:** migration on a copy of a baseline-format DB, writer under concurrency, queue overflow, streaming record, query bounds.
 - **Acceptance:** a request is traceable from its response `X-Request-ID` to one row.
 
-### Phase 9 — Security and access
+### Phase 9 — Security and access  ✅ (spend limits, cache tenant isolation not done)
 - **Problem:** S-1…S-4.
 - **Features:** auth on by default; key records (hashed, name, scopes `chat`/`admin`, optional model allow-list, rate limit, daily spend limit) in SQLite; CLI to create/list/revoke keys; per-key rate limiting (token bucket in-process, Redis-backed when available); attribution from key not `user`; admin endpoints require `admin` scope; CORS restricted by default; refuse to listen on a non-loopback address with auth off.
 - **Tests:** each scope, rate limit, revoked key, timing-safe compare, secrets absent from logs.

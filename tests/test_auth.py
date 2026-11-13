@@ -110,9 +110,9 @@ class TestSettingsParsing:
         assert settings.api_keys == ["key-a", "key-b", "key-c"]
         assert settings.auth_enabled is True
 
-    def test_cors_origins_default_wildcard(self):
+    def test_cors_origins_default_is_none(self):
         settings = Settings()
-        assert settings.cors_origins == ["*"]
+        assert settings.cors_origins == []  # changed in 2.0: was "*"; opt in with CORS_ALLOW_ORIGINS
 
     def test_cors_origins_parsed_list(self):
         settings = Settings(cors_allow_origins="https://a.com, https://b.com")

@@ -17,7 +17,7 @@ from app import __version__
 from app import telemetry as tel
 from app.api.admin import router as admin_router
 from app.asgi import RequestContextMiddleware
-from app.auth import require_api_key
+from app.auth import auth_enforced, require_scope
 from app.cache import FlightAborted, ResponseCache
 from app.compat import get_header
 from app.compressor import compress_context
@@ -32,10 +32,12 @@ from app.errors import (
     sse_error_event,
 )
 from app.fingerprint import build_fingerprint
+from app.keys import ANONYMOUS, KeyStore, Principal
 from app.limits import ConcurrencyLimiter
 from app.middleware import TelemetryMiddleware
 from app.models import ChatCompletionRequest, ChatMessage, HealthResponse
 from app.proxy import ProxyClient, UpstreamError
+from app.ratelimit import RateLimiter
 from app.router import ModelRouter
 from app.tokens import total_text_chars
 from app.vector_index import VectorIndex
@@ -104,6 +106,18 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("cache.ready", semantic_enabled=cache.semantic_enabled, ttl_seconds=settings.cache_ttl_seconds)
 
     application.state.limiter = ConcurrencyLimiter(settings.max_concurrent_upstream)
+    application.state.rate_limiter = RateLimiter()
+
+    # --- API keys (hashed, in the same SQLite file as telemetry) ---
+    key_store = KeyStore(settings.sqlite_db_path)
+    application.state.key_store = key_store
+    if settings.nightjar_auth == "required" and not settings.api_keys and not key_store.has_active_keys():
+        logger.error(
+            "auth.required_but_no_keys",
+            hint="every protected request will be 401. Create a key: python -m app.keys create --name admin "
+                 "--scopes chat,admin  (or set NIGHTJAR_API_KEYS, or NIGHTJAR_AUTH=off to opt out)",
+        )
+    logger.info("auth.mode", mode=settings.nightjar_auth, enforced=auth_enforced(settings, key_store))
 
     # --- Model router (with test_mode support) ---
     router = ModelRouter(
@@ -163,7 +177,7 @@ if _dashboard_dir.exists():
     app.mount("/dashboard", StaticFiles(directory=str(_dashboard_dir), html=True), name="dashboard")
 
 # ─── Admin router (cost reporting, request log) ──────────────────────────
-app.include_router(admin_router, dependencies=[Depends(require_api_key)])
+app.include_router(admin_router, dependencies=[Depends(require_scope("admin"))])
 
 
 # ───────────────────────── Health Check ──────────────────────────────────
@@ -194,8 +208,10 @@ async def health_check(request: Request) -> HealthResponse:
 # ─────────────────── Chat Completions Endpoint ───────────────────────────
 
 
-@app.post("/v1/chat/completions", response_model=None, dependencies=[Depends(require_api_key)])
-async def chat_completions(request: Request, body: ChatCompletionRequest):
+@app.post("/v1/chat/completions", response_model=None)
+async def chat_completions(
+    request: Request, body: ChatCompletionRequest, principal: Principal = Depends(require_scope("chat")),
+):
     """OpenAI-compatible chat completions endpoint.
 
     Pipeline:
@@ -216,6 +232,12 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
     # below — otherwise failed requests were logged with model_requested=None,
     # which made cost/error telemetry for a specific model unreliable.
     request.state.model_requested = body.model
+    request.state.api_key_name = principal.name
+
+    rpm = principal.rate_limit_rpm or settings.default_rate_limit_rpm or None
+    rate_limiter: RateLimiter | None = getattr(request.app.state, "rate_limiter", None)
+    if rate_limiter is not None:
+        rate_limiter.check(principal.name, rpm)
 
     try:
         messages_dicts = [m.model_dump(exclude_none=True) for m in body.messages]
@@ -226,7 +248,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
 
         # --- Model routing ---
         override_model = get_header(request, "model-override")
-        _enforce_model_policy(settings, body.model, override_model)
+        _enforce_model_policy(settings, body.model, override_model, principal)
         routing = router.route(body.model, messages_dicts, override_model=override_model)
         request.state.model_used = routing.model_selected
         request.state.tier = routing.tier.value
@@ -316,24 +338,28 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
         raise from_upstream(exc.status_code, exc.detail) from exc
 
 
-def _enforce_model_policy(settings: Settings, requested: str, override: str | None) -> None:
+def _enforce_model_policy(
+    settings: Settings, requested: str, override: str | None, principal: Principal = ANONYMOUS,
+) -> None:
     """Reject caller-chosen models outside ALLOWED_MODELS (when set).
 
     Applies to the requested model and to the override header. The routing alias and the
     operator-configured tier models are always allowed. This bounds which models a caller
     can spend money on; per-key limits come with the access-control phase.
     """
-    allowed = settings.allowed_model_list
-    if not allowed:
-        return
     from app.router import ROUTING_ALIAS
 
-    for name, param in ((override, "X-NightJar-Model-Override"), (requested, "model")):
-        if name and name != ROUTING_ALIAS and name not in allowed:
-            raise NightJarError(
-                403, f"Model {name!r} is not allowed on this gateway.",
-                type="permission_error", code="model_not_allowed", param=param,
-            )
+    # Both lists must permit the model: the gateway-wide ALLOWED_MODELS and the caller's own key.
+    policies = ((settings.allowed_model_list, "this gateway"), (list(principal.allowed_models), "this API key"))
+    for allowed, who in policies:
+        if not allowed:
+            continue
+        for name, param in ((override, "X-NightJar-Model-Override"), (requested, "model")):
+            if name and name != ROUTING_ALIAS and name not in allowed:
+                raise NightJarError(
+                    403, f"Model {name!r} is not allowed on {who}.",
+                    type="permission_error", code="model_not_allowed", param=param,
+                )
 
 
 def _cache_hit_response(request: Request, routing, response: dict, tier: str | None, similarity: float) -> JSONResponse:
@@ -425,12 +451,12 @@ async def _stream_response(
 # ─────────────────── Telemetry Endpoints ─────────────────────────────────
 
 
-@app.get("/v1/telemetry", dependencies=[Depends(require_api_key)])
+@app.get("/v1/telemetry", dependencies=[Depends(require_scope("admin"))])
 async def get_telemetry(limit: int = Query(default=50, ge=1, le=500), offset: int = Query(default=0, ge=0)):
     return {"records": tel.get_records(limit, offset), "limit": limit, "offset": offset}
 
 
-@app.get("/v1/telemetry/summary", dependencies=[Depends(require_api_key)])
+@app.get("/v1/telemetry/summary", dependencies=[Depends(require_scope("admin"))])
 async def get_telemetry_summary():
     return tel.get_summary()
 
@@ -446,9 +472,9 @@ _REMOVED_MESSAGE = (
 )
 
 
-@app.api_route("/v1/threshold", methods=["GET"], dependencies=[Depends(require_api_key)])
-@app.api_route("/v1/threshold/history", methods=["GET"], dependencies=[Depends(require_api_key)])
-@app.api_route("/v1/threshold/evaluate", methods=["POST"], dependencies=[Depends(require_api_key)])
+@app.api_route("/v1/threshold", methods=["GET"], dependencies=[Depends(require_scope("admin"))])
+@app.api_route("/v1/threshold/history", methods=["GET"], dependencies=[Depends(require_scope("admin"))])
+@app.api_route("/v1/threshold/evaluate", methods=["POST"], dependencies=[Depends(require_scope("admin"))])
 async def threshold_removed():
     raise NightJarError(410, _REMOVED_MESSAGE, type="invalid_request_error", code="endpoint_removed")
 
@@ -456,7 +482,7 @@ async def threshold_removed():
 # ─────────────────── Cache Invalidation Endpoints ────────────────────────
 
 
-@app.get("/v1/cache/stats", dependencies=[Depends(require_api_key)])
+@app.get("/v1/cache/stats", dependencies=[Depends(require_scope("admin"))])
 async def cache_stats(request: Request):
     """Return cache statistics."""
     settings: Settings = request.app.state.settings
@@ -466,7 +492,7 @@ async def cache_stats(request: Request):
     return stats
 
 
-@app.delete("/v1/cache", dependencies=[Depends(require_api_key)])
+@app.delete("/v1/cache", dependencies=[Depends(require_scope("admin"))])
 async def flush_cache(request: Request):
     """Flush the entire semantic cache."""
     cache: ResponseCache = request.app.state.cache
@@ -474,7 +500,7 @@ async def flush_cache(request: Request):
     return {"status": "ok", **result}
 
 
-@app.delete("/v1/cache/{key}", dependencies=[Depends(require_api_key)])
+@app.delete("/v1/cache/{key}", dependencies=[Depends(require_scope("admin"))])
 async def invalidate_cache_key(key: str, request: Request):
     """Invalidate a specific cache entry by key."""
     cache: ResponseCache = request.app.state.cache

@@ -52,6 +52,10 @@ RUN mkdir -p /app/data && chown -R appuser:appuser /app /home/appuser/.cache
 # Switch to non-root user
 USER appuser
 
+# Secure by default in a container: no keys configured means every protected request is refused
+# (and a startup error explains how to create one), instead of an open gateway holding provider keys.
+ENV NIGHTJAR_AUTH=required
+
 EXPOSE 8000
 
 # Health check — verifies the app is responding
