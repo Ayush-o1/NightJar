@@ -409,6 +409,9 @@ class ProxyClient:
         try:
             payload = request.model_dump(exclude_none=True)
             payload["stream"] = True
+            # Ask the provider for a final usage chunk so streamed requests can be counted and costed.
+            # (The gateway removes that chunk again unless the caller asked for it; see app/main.py.)
+            payload["stream_options"] = {**(payload.get("stream_options") or {}), "include_usage": True}
             raw_model = model_override or payload.pop("model", request.model)
             payload["model"] = self._resolve_model(raw_model)
 

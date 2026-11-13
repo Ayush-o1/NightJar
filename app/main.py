@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -132,6 +133,9 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
 
     # --- Telemetry DB ---
     tel.init_db()
+    if settings.telemetry_retention_days:
+        purged = tel.purge_older_than(settings.telemetry_retention_days)
+        logger.info("telemetry.retention", days=settings.telemetry_retention_days, purged=purged)
 
     for name in settings.deprecated_settings_in_use:
         logger.warning("deprecated.setting", setting=name, use_instead="NIGHTJAR_API_KEYS")
@@ -202,7 +206,10 @@ async def health_check(request: Request) -> HealthResponse:
         except Exception:  # noqa: BLE001
             redis_status = "unreachable"
     limiter = getattr(request.app.state, "limiter", None)
-    return HealthResponse(redis=redis_status, upstream=limiter.stats() if limiter else None)
+    return HealthResponse(
+        redis=redis_status, upstream=limiter.stats() if limiter else None,
+        telemetry_write_failures=sum(tel.write_failures.values()),
+    )
 
 
 # ─────────────────── Chat Completions Endpoint ───────────────────────────
@@ -256,7 +263,9 @@ async def chat_completions(
 
         # Streaming bypasses cache and compression
         if body.stream:
-            return await _stream_response(proxy_client, body, routing, getattr(request.app.state, "limiter", None))
+            return await _stream_response(
+                proxy_client, body, routing, getattr(request.app.state, "limiter", None), request.state,
+            )
 
         # --- Cache: fingerprint the ORIGINAL request, so the key reflects what the caller asked ---
         cache_mode = (get_header(request, "cache") or "").lower()  # "", "bypass" or "refresh"
@@ -362,6 +371,20 @@ def _enforce_model_policy(
                 )
 
 
+def _usage_from_chunk(chunk: str) -> tuple[dict | None, bool]:
+    """(usage, is_usage_only) for an SSE chunk; (None, False) when it carries no usage."""
+    if '"usage"' not in chunk:  # cheap pre-check: almost every chunk skips JSON parsing
+        return None, False
+    try:
+        data = json.loads(chunk.split("data:", 1)[1].strip())
+    except (ValueError, IndexError):
+        return None, False
+    usage = data.get("usage") if isinstance(data, dict) else None
+    if not usage:
+        return None, False
+    return usage, not data.get("choices")
+
+
 def _cache_hit_response(request: Request, routing, response: dict, tier: str | None, similarity: float) -> JSONResponse:
     """Serve a cached (or coalesced) response and record it for telemetry.
 
@@ -375,6 +398,7 @@ def _cache_hit_response(request: Request, routing, response: dict, tier: str | N
     request.state.completion_tokens = usage.get("completion_tokens", 0)
     request.state.compressed = False
     request.state.compression_ratio = 1.0
+    request.state.cache_tier = tier or "exact"
     return JSONResponse(
         content=response,
         headers={
@@ -389,6 +413,7 @@ def _cache_hit_response(request: Request, routing, response: dict, tier: str | N
 
 async def _stream_response(
     proxy_client: ProxyClient, body: ChatCompletionRequest, routing, limiter: ConcurrencyLimiter | None = None,
+    state=None,
 ) -> StreamingResponse:
     """Start the upstream stream, then hand back an SSE response.
 
@@ -413,12 +438,23 @@ async def _stream_response(
             limiter.release()
         raise
 
+    client_wants_usage = bool(((body.model_extra or {}).get("stream_options") or {}).get("include_usage"))
+
+    def account(chunk: str) -> str | None:
+        """Record token usage from a chunk; drop the usage-only chunk the caller did not ask for."""
+        usage, usage_only = _usage_from_chunk(chunk)
+        if usage and state is not None:
+            state.prompt_tokens = usage.get("prompt_tokens")
+            state.completion_tokens = usage.get("completion_tokens")
+        return None if usage_only and not client_wants_usage else chunk
+
     async def events() -> AsyncGenerator[str, None]:
         try:
-            if first is not None:
-                yield first
+            if first is not None and (out := account(first)) is not None:
+                yield out
             async for chunk in stream:
-                yield chunk
+                if (out := account(chunk)) is not None:
+                    yield out
         except UpstreamError as exc:
             yield sse_error_event(from_upstream(exc.status_code, exc.detail))
         except Exception as exc:  # noqa: BLE001 - nothing else can be done once streaming started

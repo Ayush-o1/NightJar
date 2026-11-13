@@ -106,6 +106,7 @@ class RequestContextMiddleware:
             pass
         except Exception as exc:  # noqa: BLE001 - last line of defence, logged below
             if not too_large:
+                state["error_code"] = "internal_error"
                 logger.error("unhandled_exception", request_id=request_id, path=scope.get("path"), exc_info=exc)
                 if response_started:
                     raise

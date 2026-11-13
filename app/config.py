@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     # --- Storage Paths ---
     sqlite_db_path: str = "./data/telemetry.db"
+    # Telemetry older than this is deleted at startup. 0 keeps everything.
+    telemetry_retention_days: int = 90
     vector_index_path: str = "./data/vectors.npz"
     # --- Test Mode ---
     test_mode: bool = False

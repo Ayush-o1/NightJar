@@ -5,13 +5,48 @@ from __future__ import annotations
 import sqlite3
 import threading
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+import structlog
 
 from app.config import get_settings
 
 DB_PATH = get_settings().sqlite_db_path
 _lock = threading.Lock()
+
+logger = structlog.get_logger()
+
+# Writes that failed since process start. A telemetry failure never fails the request, but it must
+# not be invisible either: the count is reported by /health.
+write_failures = {"telemetry": 0, "request_log": 0}
+
+# Forward-only schema migrations, applied in order and recorded in PRAGMA user_version. They only ADD
+# columns, so existing data is never rewritten or dropped. A database from before NightJar 2.0 has
+# user_version 0 and is upgraded in place.
+_MIGRATIONS: list[tuple[int, list[tuple[str, str, str]]]] = [
+    (1, [
+        ("telemetry", "api_key_name", "TEXT"),      # who made the call (authenticated key name)
+        ("telemetry", "http_status", "INTEGER"),    # what the caller got
+        ("telemetry", "error_code", "TEXT"),        # NightJar error code for failed requests
+        ("telemetry", "cache_tier", "TEXT"),        # exact | semantic | coalesced
+    ]),
+]
+SCHEMA_VERSION = _MIGRATIONS[-1][0]
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    current = conn.execute("PRAGMA user_version").fetchone()[0]
+    for version, additions in _MIGRATIONS:
+        if version <= current:
+            continue
+        for table, column, decl in additions:
+            existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            if column not in existing:  # idempotent: safe if a previous run died half-way
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        conn.execute(f"PRAGMA user_version = {version}")
+        logger.info("telemetry.migrated", to_version=version)
 
 
 def _ensure_db_dir() -> None:
@@ -48,6 +83,7 @@ def init_db() -> None:
         # time-range filtering — without it, every telemetry page/filter does
         # a full table scan.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_telemetry_timestamp ON telemetry(timestamp)")
+        _migrate(conn)
     # request_log is a separate table with different semantics — see below
     init_request_log()
 
@@ -67,6 +103,8 @@ def get_conn():
 
 def write_record(record: dict[str, Any]) -> None:
     """Write a single telemetry record."""
+    defaults = {"tier": None, "routing_reason": None, "api_key_name": None, "http_status": None,
+                "error_code": None, "cache_tier": None}
     with _lock:
         try:
             with get_conn() as conn:
@@ -74,14 +112,18 @@ def write_record(record: dict[str, Any]) -> None:
                     INSERT OR IGNORE INTO telemetry
                     (request_id, timestamp, model_requested, model_used, tier, routing_reason,
                      cache_hit, similarity_score, prompt_tokens, completion_tokens,
-                     estimated_cost_usd, latency_ms, compressed, compression_ratio)
+                     estimated_cost_usd, latency_ms, compressed, compression_ratio,
+                     api_key_name, http_status, error_code, cache_tier)
                     VALUES
                     (:request_id, :timestamp, :model_requested, :model_used, :tier, :routing_reason,
                      :cache_hit, :similarity_score, :prompt_tokens, :completion_tokens,
-                     :estimated_cost_usd, :latency_ms, :compressed, :compression_ratio)
-                """, {"tier": None, "routing_reason": None, **record})
-        except Exception:
-            pass
+                     :estimated_cost_usd, :latency_ms, :compressed, :compression_ratio,
+                     :api_key_name, :http_status, :error_code, :cache_tier)
+                """, {**defaults, **record})
+        except Exception as exc:  # noqa: BLE001 - telemetry must never fail the request, but must not be silent
+            write_failures["telemetry"] += 1
+            logger.error("telemetry.write_failed", table="telemetry", reason=str(exc),
+                         total_failures=write_failures["telemetry"])
 
 
 def get_records(limit: int = 50, offset: int = 0) -> list[dict]:
@@ -103,7 +145,8 @@ def get_summary() -> dict[str, Any]:
                 SUM(CASE WHEN cache_hit THEN 1 ELSE 0 END) as cache_hits,
                 ROUND(AVG(latency_ms), 2) as avg_latency_ms,
                 ROUND(SUM(estimated_cost_usd), 6) as total_cost_usd,
-                ROUND(AVG(prompt_tokens + completion_tokens), 1) as avg_tokens
+                ROUND(AVG(prompt_tokens + completion_tokens), 1) as avg_tokens,
+                SUM(CASE WHEN http_status >= 400 THEN 1 ELSE 0 END) as error_requests
             FROM telemetry
         """).fetchone()
 
@@ -179,8 +222,10 @@ def write_request_log(record: dict[str, Any]) -> None:
                      :prompt_tokens, :completion_tokens, :total_cost,
                      :user_id, :latency_ms, :status)
                 """, {col: record.get(col) for col in _REQUEST_LOG_COLS})
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            write_failures["request_log"] += 1
+            logger.error("telemetry.write_failed", table="request_log", reason=str(exc),
+                         total_failures=write_failures["request_log"])
 
 
 def get_request_log(
@@ -381,3 +426,15 @@ def get_total_savings() -> dict[str, Any]:
         "hypothetical_spend_usd": round(total_hypothetical, 6),
         "savings_pct": savings_pct,
     }
+
+
+def purge_older_than(days: int) -> int:
+    """Delete telemetry and request_log rows older than ``days``. Returns rows deleted. 0 disables."""
+    if days <= 0:
+        return 0
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    deleted = 0
+    with _lock, get_conn() as conn:
+        for table in ("telemetry", "request_log"):
+            deleted += conn.execute(f"DELETE FROM {table} WHERE timestamp < ?", (cutoff,)).rowcount
+    return deleted

@@ -12,7 +12,7 @@ Branch: `feature/nightjar-modernization` (from `main` @ `1a4819c`). Not merged t
 | 5 Cache correctness | Done | Exact tier + partitioned, guarded, opt-in semantic tier; request fingerprint; eligibility rules; single-flight; numpy vector index replaces FAISS (ADR-009); adaptive threshold removed (ADR-008); measured false-hit rates published. 364 tests pass (cache tests run against real Redis). |
 | 6 Context compression | Done | Tool-call-safe splitting (a `tool` reply is never separated from its assistant call), per-conversation summary memoisation (bounded LRU), empty summaries rejected, runs on the miss path only (from Phase 5). 375 tests pass. |
 | 7 Reliability | Mostly done | Explicit timeout (default 60 s; LiteLLM's default is 6000 s), error-class retry and cooldown policy, concurrency limit with 503 + Retry-After, fixed messages for server-side upstream errors, client-disconnect cancellation verified. **Not done:** retry budget; config-driven deployments/fallbacks. 400 tests pass (tests use a fake provider over real HTTP). |
-| 8 Database and telemetry | Not started | |
+| 8 Database and telemetry | Mostly done | Versioned additive migrations (tested on a 1.x-schema copy), failed requests recorded with `http_status`/`error_code`, `api_key_name`, `cache_tier`, NULL-not-0 for unknown tokens, streaming usage via `include_usage` (hidden from callers who didn't ask), write failures counted and shown in `/health`, retention. 452 tests. **Not done:** merging `telemetry` and `request_log`, write batching, cursor pagination. |
 | 9 Security and access | Mostly done | Auth modes (`auto`/`required`/`off`; Docker sets `required`), hashed scoped keys + CLI, per-key model allow-list and rate limit, admin scope, CORS closed by default, attribution by key name. 429 tests pass. **Not done:** per-key spend limits, cache tenant isolation, shared rate limiter, audit log, persisting key name in telemetry (Phase 8). |
 | 10 Dashboard | Not started | |
 | 11 Performance and benchmarking | Not started | |
@@ -61,5 +61,7 @@ Branch: `feature/nightjar-modernization` (from `main` @ `1a4819c`). Not merged t
 - **Phase 9 caveat:** a cached response is served to any caller with an identical request (no per-key cache partition). That is documented in the security model, with `X-NightJar-Cache: bypass` as the escape hatch.
 
 - **A second documented-variable bug, caught by the `.env.example` test:** the auth setting was named `auth` (env `AUTH`) while the docs and `Dockerfile` used `NIGHTJAR_AUTH`, so "secure by default in Docker" would have been false. My first live check missed it because keys existed in the database, which made `auto` mode enforce anyway. Renamed to `nightjar_auth`, and added tests that the env var alone enforces auth with zero keys and that the Dockerfile's variable is a real setting; re-verified live. Lesson recorded: a live check must isolate the variable it claims to test.
+
+- **Phase 8 decision:** the two-table merge was not done. The join key lives in LiteLLM's callback; `telemetry` now has what the dashboard needs, and the limitation is documented in [architecture/DATABASE_DESIGN.md](architecture/DATABASE_DESIGN.md). SQLite was kept; the conditions that would justify Postgres are listed there.
 
 Updated after each phase.

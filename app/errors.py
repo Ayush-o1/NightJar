@@ -154,6 +154,7 @@ def _respond(request: Request, status_code: int, body: dict[str, Any], headers: 
 
 
 async def _nightjar_error_handler(request: Request, exc: NightJarError) -> JSONResponse:
+    request.state.error_code = exc.code
     return _respond(request, exc.status_code, exc.body(), exc.headers)
 
 

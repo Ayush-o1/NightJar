@@ -162,3 +162,5 @@ class HealthResponse(BaseModel):
     redis: str = "unknown"
     # Provider calls in flight, the limit, and how many requests were shed (503) since start.
     upstream: dict[str, int] | None = None
+    # Telemetry rows that could not be written since start (a failure never fails the request).
+    telemetry_write_failures: int = 0

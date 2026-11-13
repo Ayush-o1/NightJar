@@ -74,7 +74,7 @@ Each phase ends with: tests added and passing, `ruff` clean, full suite green, a
 - **Tests:** against a **local fake upstream** with scripted latency, 429s, 500s, hangs and malformed JSON: retries bounded, fallbacks used, auth error not retried, saturation sheds load, disconnect cancels.
 - **Acceptance:** the baseline's "one 401 puts the only deployment into cooldown" scenario is a test.
 
-### Phase 8 — Database and telemetry
+### Phase 8 — Database and telemetry  ✅ (table merge, batching not done)
 - **Problem:** D-1, D-2, streaming accounting.
 - **Features:** single `requests` table; schema versioning with forward-only migrations; migration of `telemetry` and `request_log` data without deleting them; async batched writer with a drop counter; streaming completion records via `include_usage`; cost from LiteLLM price data with `cost_source`; savings figures labeled estimates and computed from real stored token counts; retention job; bounded, indexed query endpoints with cursor pagination.
 - **Tests:** migration on a copy of a baseline-format DB, writer under concurrency, queue overflow, streaming record, query bounds.
