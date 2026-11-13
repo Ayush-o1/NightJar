@@ -21,17 +21,21 @@ class Settings(BaseSettings):
     # --- Default model tiers (used by router & compressor) ---
     simple_model: str = "gpt-3.5-turbo"
     complex_model: str = "gpt-4o"
-    # --- Redis (connection URL for NightJar's semantic cache) ---
+    # --- Redis (response payloads for the cache). Include a password in the URL if needed:
+    #     redis://:password@host:6379 ---
     redis_url: str = "redis://localhost:6379"
-    # --- Redis (discrete params for LiteLLM's built-in cache) ---
-    redis_host: str = "localhost"
-    redis_port: int = 6379
-    redis_password: str = ""
-    # --- LiteLLM response cache ---
-    enable_cache: bool = False          # set True in .env to activate Redis cache
-    # --- Semantic Cache ---
+    # --- Response cache ---
+    # The exact tier is always on. The semantic tier is opt-in because embedding similarity can
+    # return a wrong answer (see docs/benchmarks/CACHE_CORRECTNESS.md).
+    semantic_cache: bool = False
+    # Minimum cosine similarity for a semantic hit (only used when semantic_cache).
     similarity_threshold: float = 0.92
     cache_ttl_seconds: int = 86400
+    # Requests with a temperature above this are not cached. An unset temperature counts as 1.0.
+    cache_max_temperature: float = 1.0
+    # Cap on vectors held by the semantic tier (oldest evicted first).
+    cache_max_entries: int = 50_000
+    cache_persist_interval_seconds: int = 60
     # --- Context Compression ---
     compress_threshold: int = 2000
     compress_keep_recent: int = 4
@@ -49,12 +53,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     # --- Storage Paths ---
     sqlite_db_path: str = "./data/telemetry.db"
-    faiss_index_path: str = "./data/faiss.index"
-    # --- Adaptive Threshold ---
-    adaptive_threshold_enabled: bool = True
-    adaptive_threshold_window: int = 100
-    adaptive_threshold_min: float = 0.70
-    adaptive_threshold_max: float = 0.98
+    vector_index_path: str = "./data/vectors.npz"
     # --- Test Mode ---
     test_mode: bool = False
     # --- OpenTelemetry ---

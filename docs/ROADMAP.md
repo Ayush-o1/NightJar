@@ -48,13 +48,13 @@ Each phase ends with: tests added and passing, `ruff` clean, full suite green, a
 - **Tests:** 1 MB hostile input returns 413 and `/health` stays responsive; malformed JSON, empty messages, list content, streaming mid-stream failure, unexpected exception.
 - **DoD:** the baseline's 10 MB probe is rerun and no longer stalls the server (bounded size reproduced, not the 10 MB case, to avoid hanging the check).
 
-### Phase 4 — Routing and provider layer
+### Phase 4 — Routing and provider layer  ✅ (partly; deployments config moved to Phase 7)
 - **Problem:** R-1, R-2, S-3, stale model names, ignored YAML sections.
 - **Features:** explicit model honored by default; routing via alias `nightjar/auto` or `ROUTING_MODE=always`; whole-word matching; structured decision (`rule`, `matched`, `tier`, `token_estimate`); tiers, model lists and fallback chains loaded from one validated config file, and the YAML sections that were never read are either read or removed; override header gated by key permission (Phase 9) and an allow-list.
 - **Tests:** requested model respected; alias routes; word-boundary cases (`which`, `know`, `token`); config validation errors; fallback chain loaded from file.
 - **Acceptance:** README accuracy claim replaced by measured numbers on an extended labeled set with hard cases.
 
-### Phase 5 — Cache correctness
+### Phase 5 — Cache correctness  ✅
 - **Problem:** C-1…C-3, C-5…C-7.
 - **Features:** request fingerprint; exact tier; partitioned, gated semantic tier (opt-in); eligibility rules; TTL-aware vector eviction; timer-based atomic persistence; single-flight for concurrent identical misses; adaptive threshold removed, endpoints return `410 Gone` with a pointer for one release; `scripts/calibrate_threshold.py` for offline calibration; labeled pair set with measured false-hit rate.
 - **DB:** none (metadata beside vectors). **API:** `X-Cache: HIT|MISS|BYPASS`, `X-Cache-Tier: exact|semantic`.

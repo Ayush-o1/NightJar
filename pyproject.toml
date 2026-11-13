@@ -17,7 +17,6 @@ dependencies = [
     "tiktoken>=0.8",
     "sentence-transformers>=3.3,<4",
     "numpy>=1.26",
-    "faiss-cpu>=1.9",
     "redis>=5.2,<6",
     "structlog>=24.4",
     "pyyaml>=6.0",

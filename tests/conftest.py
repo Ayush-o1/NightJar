@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import telemetry as tel
-from app.cache import CacheResult, SemanticCache
+from app.cache import CacheResult, ResponseCache
 from app.config import Settings
 from app.main import app
 from app.proxy import ProxyClient
@@ -70,7 +70,6 @@ def test_settings() -> Settings:
         similarity_threshold=0.92,
         cache_ttl_seconds=86400,
         preferred_provider="openai",
-        enable_cache=False,   # never touch Redis in unit tests
     )
 
 
@@ -84,11 +83,12 @@ def mock_proxy_client() -> AsyncMock:
 
 @pytest.fixture
 def mock_cache() -> AsyncMock:
-    """Return a mocked SemanticCache."""
-    cache = AsyncMock(spec=SemanticCache)
+    """Return a mocked ResponseCache (every request is the single-flight leader)."""
+    cache = AsyncMock(spec=ResponseCache)
     cache.close = AsyncMock()
     cache.lookup.return_value = CacheResult(hit=False)
-    cache.store.return_value = "mock_cache_key"
+    cache.store.return_value = True
+    cache.begin_flight = MagicMock(return_value=MagicMock(leader=True))
     return cache
 
 
@@ -157,3 +157,94 @@ def sample_streaming_request_body() -> dict:
         "messages": [{"role": "user", "content": "Hello!"}],
         "stream": True,
     }
+
+
+# ── Cache test infrastructure ───────────────────────────────────────────────
+import hashlib  # noqa: E402
+import os  # noqa: E402
+import shutil  # noqa: E402
+import socket  # noqa: E402
+import subprocess  # noqa: E402
+import time  # noqa: E402
+
+
+class FakeEmbedder:
+    """Deterministic embedder. ``set(text, vec)`` pins a vector; otherwise a text-hash vector is used.
+
+    Real MiniLM similarities are measured in benchmarks/cache_eval.py, not in unit tests, so tests
+    can state exactly how similar two prompts are.
+    """
+
+    dimension = 16
+
+    def __init__(self) -> None:
+        self.pinned: dict[str, np.ndarray] = {}
+        self.calls = 0
+        self.fail = False
+
+    def set(self, text: str, vec: np.ndarray) -> None:
+        self.pinned[text] = np.asarray(vec, dtype=np.float32) / np.linalg.norm(vec)
+
+    def embed(self, text: str) -> np.ndarray:
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("embedder down")
+        if text in self.pinned:
+            return self.pinned[text]
+        seed = int.from_bytes(hashlib.sha256(text.encode()).digest()[:4], "big")
+        v = np.random.default_rng(seed).standard_normal(self.dimension).astype(np.float32)
+        return v / np.linalg.norm(v)
+
+    @staticmethod
+    def pair(similarity: float) -> tuple[np.ndarray, np.ndarray]:
+        """Two unit vectors with the given cosine similarity."""
+        a = np.zeros(FakeEmbedder.dimension, dtype=np.float32)
+        a[0] = 1.0
+        b = np.zeros_like(a)
+        b[0], b[1] = similarity, (1 - similarity**2) ** 0.5
+        return a, b
+
+
+@pytest.fixture
+def fake_embedder() -> FakeEmbedder:
+    return FakeEmbedder()
+
+
+@pytest.fixture(scope="session")
+def redis_url():
+    """A real Redis: REDIS_TEST_URL if set (CI service container), else a throwaway local server."""
+    url = os.environ.get("REDIS_TEST_URL")
+    if url:
+        yield url
+        return
+    binary = shutil.which("redis-server")
+    if not binary:
+        pytest.skip("no Redis available (set REDIS_TEST_URL or install redis-server)")
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    proc = subprocess.Popen(
+        [binary, "--port", str(port), "--save", "", "--appendonly", "no", "--bind", "127.0.0.1"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        try:
+            socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
+            break
+        except OSError:
+            time.sleep(0.05)
+    yield f"redis://127.0.0.1:{port}"
+    proc.terminate()
+    proc.wait(timeout=5)
+
+
+@pytest.fixture
+async def redis_client(redis_url):
+    from redis.asyncio import Redis
+
+    client = Redis.from_url(redis_url, decode_responses=True)
+    await client.flushdb()
+    yield client
+    await client.flushdb()
+    await client.aclose()

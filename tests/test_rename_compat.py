@@ -72,3 +72,36 @@ class TestHeaderAliases:
         mock_proxy_client.forward.return_value = chat_completion_fixture
         test_client.post("/v1/chat/completions", json=sample_request_body)
         assert mock_router.route.call_args.kwargs["override_model"] is None
+
+
+class TestDocumentedEnvVarNames:
+    """Setting field names are the env var names. These are the names the docs and .env.example promise."""
+
+    def test_semantic_cache_env_var(self, monkeypatch):
+        assert Settings().semantic_cache is False
+        monkeypatch.setenv("SEMANTIC_CACHE", "true")
+        assert Settings().semantic_cache is True
+
+    @pytest.mark.parametrize(("env", "attr", "value", "expected"), [
+        ("ROUTING_MODE", "routing_mode", "always", "always"),
+        ("ALLOWED_MODELS", "allowed_models", "a,b", "a,b"),
+        ("CACHE_MAX_TEMPERATURE", "cache_max_temperature", "0.3", 0.3),
+        ("CACHE_MAX_ENTRIES", "cache_max_entries", "10", 10),
+        ("VECTOR_INDEX_PATH", "vector_index_path", "/x/v.npz", "/x/v.npz"),
+        ("MAX_REQUEST_BYTES", "max_request_bytes", "1024", 1024),
+        ("MAX_PROMPT_CHARS", "max_prompt_chars", "99", 99),
+        ("SIMILARITY_THRESHOLD", "similarity_threshold", "0.9", 0.9),
+    ])
+    def test_new_settings_are_readable_from_their_documented_env_vars(self, monkeypatch, env, attr, value, expected):
+        monkeypatch.setenv(env, value)
+        assert getattr(Settings(), attr) == expected
+
+    def test_every_variable_in_env_example_is_a_real_setting(self):
+        """Catches docs that promise a variable the code ignores (this is how SEMANTIC_CACHE was caught)."""
+        import re
+        from pathlib import Path
+
+        text = (Path(__file__).parent.parent / ".env.example").read_text()
+        documented = set(re.findall(r"(?m)^([A-Z][A-Z0-9_]+)=", text))
+        fields = {name.upper() for name in Settings.model_fields}
+        assert documented - fields == set(), f"in .env.example but not a setting: {documented - fields}"

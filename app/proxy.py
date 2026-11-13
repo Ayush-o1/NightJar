@@ -2,7 +2,6 @@
 
 Implements:
   - LiteLLM Router for load balancing + automatic provider failover
-  - Redis-backed LiteLLM Cache for exact-match response deduplication
   - Model name resolution (provider prefix auto-detection)
   - Universal tool/function-calling support with graceful translation guard
     (LiteLLM translates OpenAI tool format → provider-native format automatically)
@@ -25,7 +24,6 @@ from datetime import datetime, timezone
 import litellm
 import structlog
 from litellm import Router
-from litellm.caching.caching import Cache
 
 from app import telemetry as tel
 from app.config import Settings
@@ -191,10 +189,8 @@ class ProxyClient:
     - Load balancing across deployments (simple-shuffle strategy)
     - Configurable retries before escalating to fallback providers
 
-    LiteLLM Cache (Redis) provides:
-    - Exact-match caching: identical prompts skip the API entirely
-    - Complements NightJar's own semantic cache (FAISS) which catches
-      near-duplicate queries; this layer catches byte-identical repeats
+    Response caching is NOT done here: NightJar's own cache (app/cache.py) sits in front of
+    this client. LiteLLM's built-in cache was removed as a redundant second layer.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -214,15 +210,10 @@ class ProxyClient:
             set_verbose=False,
         )
 
-        # ── Enable LiteLLM Redis cache (optional) ────────────────────────
-        if settings.enable_cache:
-            self._enable_cache(settings)
-
         logger.info(
             "proxy.router.initialized",
             deployments=len(model_list),
             fallbacks=len(fallbacks),
-            cache_enabled=settings.enable_cache,
         )
 
     # ── Static builders ──────────────────────────────────────────────────
@@ -306,27 +297,6 @@ class ProxyClient:
             fallbacks.append({"simple-tier": gpt35_fallbacks})
 
         return fallbacks
-
-    @staticmethod
-    def _enable_cache(settings: Settings) -> None:
-        """Attach a Redis-backed LiteLLM cache; degrade gracefully if unavailable."""
-        try:
-            litellm.cache = Cache(
-                type="redis",
-                host=settings.redis_host,
-                port=settings.redis_port,
-                password=settings.redis_password or None,
-                ttl=settings.cache_ttl_seconds,
-            )
-            logger.info(
-                "proxy.cache.enabled",
-                host=settings.redis_host,
-                port=settings.redis_port,
-                ttl=settings.cache_ttl_seconds,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("proxy.cache.unavailable", reason=str(exc))
-            litellm.cache = None
 
     @staticmethod
     def _configure_environment(settings: Settings) -> None:

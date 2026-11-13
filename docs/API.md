@@ -32,9 +32,7 @@ using one of the configured tokens. A missing or invalid token returns `401` (Op
 | `GET` | `/health` | Health check |
 | `GET` | `/v1/telemetry` | Paginated telemetry records |
 | `GET` | `/v1/telemetry/summary` | Aggregated telemetry statistics |
-| `GET` | `/v1/threshold` | Current adaptive threshold info |
-| `GET` | `/v1/threshold/history` | Past threshold evaluations |
-| `POST` | `/v1/threshold/evaluate` | Trigger threshold evaluation |
+| `GET`/`POST` | `/v1/threshold*` | Removed in 2.0, answers `410` |
 | `GET` | `/v1/cache/stats` | Cache statistics |
 | `DELETE` | `/v1/cache` | Flush entire cache |
 | `DELETE` | `/v1/cache/{key}` | Invalidate a specific cache entry |
@@ -119,6 +117,7 @@ All caching, routing, compression, and telemetry features work transparently reg
 
 | Header | Description |
 |--------|-------------|
+| `X-NightJar-Cache` | `bypass`: skip lookup and store for this request. `refresh`: skip the lookup, call the provider, overwrite the stored entry. |
 | `X-NightJar-Model-Override` | Force a specific model regardless of routing (e.g. `gpt-4o`). Subject to `ALLOWED_MODELS` (`403 model_not_allowed`). |
 | `X-NightJar-No-Compress` | Set to `true` to skip context compression for this request |
 
@@ -262,80 +261,26 @@ Returns aggregated telemetry statistics across all recorded requests.
 
 ---
 
-## `GET /v1/threshold`
+## Removed: `/v1/threshold`, `/v1/threshold/history`, `/v1/threshold/evaluate`
 
-Returns the current adaptive similarity threshold and its metadata.
-
-### Response
-
-```json
-{
-  "current_threshold": 0.93,
-  "baseline": 0.92,
-  "last_evaluated_at": "2026-03-27T12:00:00"
-}
-```
-
----
-
-## `GET /v1/threshold/history`
-
-Past evaluations, newest first — how the threshold has moved and what the hit rate was each time.
-
-### Query Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `limit` | int | 20 | Rows to return (1–200) |
-
-### Response
-
-```json
-{
-  "records": [
-    { "threshold": 0.93, "cache_hit_rate": 0.65, "evaluated_at": "2026-03-27T12:00:00+00:00" }
-  ]
-}
-```
-
-Empty (`{"records": []}`) until the first evaluation runs.
-
----
-
-## `POST /v1/threshold/evaluate`
-
-Manually triggers an adaptive threshold evaluation based on recent cache hit rates.
-
-### Response
-
-```json
-{
-  "threshold": 0.93,
-  "cache_hit_rate": 0.65,
-  "evaluated_at": "2026-03-27T12:00:00"
-}
-```
-
-### How Evaluation Works
-
-- Analyzes the most recent `ADAPTIVE_THRESHOLD_WINDOW` requests (default: 100)
-- If cache hit rate > 60%: threshold is raised by 0.01 (up to `ADAPTIVE_THRESHOLD_MAX`)
-- If cache hit rate < 20%: threshold is lowered by 0.01 (down to `ADAPTIVE_THRESHOLD_MIN`)
-- Otherwise: threshold stays the same
+These adaptive-threshold endpoints were removed in 2.0 and answer `410 Gone` (`code: endpoint_removed`) for one release. See ADR-008. Set `SIMILARITY_THRESHOLD` and calibrate with `benchmarks/cache_eval.py`.
 
 ---
 
 ## `GET /v1/cache/stats`
 
-Returns cache statistics including vector count, Redis key count, and current similarity threshold.
+Returns cache statistics: vector count, Redis key count, whether the semantic tier is on, the configured threshold, and in-process counters since start (hits by tier, misses, coalesced requests, guard rejections, store/skip counts, Redis and embedder errors).
 
 ### Response
 
 ```json
 {
-  "total_vectors": 150,
+  "total_vectors": 0,
   "redis_keys": 148,
-  "similarity_threshold": 0.93
+  "semantic_enabled": false,
+  "similarity_threshold": 0.92,
+  "counters": {"exact_hits": 61, "semantic_hits": 0, "coalesced": 3, "misses": 87, "guard_rejections": 0,
+               "stored": 85, "not_stored": 2, "redis_errors": 0, "embed_errors": 0}
 }
 ```
 
@@ -345,7 +290,7 @@ Returns cache statistics including vector count, Redis key count, and current si
 
 ## `DELETE /v1/cache`
 
-Flush the entire semantic cache. Clears all FAISS vectors and Redis cache keys. This operation is idempotent — calling it on an empty cache returns successfully.
+Flush the response cache: all vectors in the index and all NightJar keys in Redis (other keys in the same Redis are left alone). This operation is idempotent — calling it on an empty cache returns successfully.
 
 ### Response
 
@@ -361,7 +306,7 @@ Flush the entire semantic cache. Clears all FAISS vectors and Redis cache keys. 
 
 ## `DELETE /v1/cache/{key}`
 
-Invalidate a specific cache entry by its key. Removes both the FAISS vector and the corresponding Redis entry.
+Invalidate one cache entry by its key (the hash in the Redis key `nj:v2:r:<key>`). Removes both the vector and the stored response.
 
 ### Path Parameters
 

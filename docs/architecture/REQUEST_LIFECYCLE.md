@@ -1,6 +1,6 @@
 # Request lifecycle
 
-`POST /v1/chat/completions`, as implemented after Phase 3. Failure paths come first because that is where gateways usually go wrong.
+`POST /v1/chat/completions`, as implemented after Phase 5. Failure paths come first because that is where gateways usually go wrong.
 
 ## Success path (non-streaming)
 
@@ -11,7 +11,7 @@ sequenceDiagram
     participant A as Route + auth
     participant R as Router
     participant K as Compressor
-    participant S as Cache (embed, FAISS, Redis)
+    participant S as Cache (Redis, vector index)
     participant U as LiteLLM → provider
     participant T as Telemetry
 
@@ -22,15 +22,19 @@ sequenceDiagram
     A->>A: text budget (MAX_PROMPT_CHARS)
     A->>R: route(model, messages)
     R-->>A: tier + model + reason
-    A->>K: compress if long (skippable by header)
-    A->>S: lookup(model, messages)
+    A->>A: fingerprint ORIGINAL request (model, params, messages)
+    A->>S: lookup (exact, then guarded semantic if enabled)
     alt hit
         S-->>A: cached response
-        A-->>C: 200, X-Cache: HIT
-    else miss
+        A-->>C: 200, X-Cache: HIT, X-Cache-Tier
+    else identical request already in flight
+        A->>A: wait for the leader (single-flight)
+        A-->>C: 200, X-Cache-Tier: coalesced
+    else miss (this request is the leader)
+        A->>K: compress if long (skippable by header)
         A->>U: forward(routed model)
         U-->>A: response + usage
-        A->>S: store
+        A->>S: store (only complete text answers)
         A-->>C: 200, X-Cache: MISS
     end
     A-->>T: state (model, tokens, cache hit, ...)
@@ -47,8 +51,8 @@ sequenceDiagram
 | 4 | Validation | `400 invalid_request` / `invalid_json` | `param` names the field |
 | 5 | Text budget | `400 context_length_exceeded` | Images/audio are not counted |
 | 6 | Routing | none | Always succeeds; bounded token count |
-| 7 | Compression | none | Any failure falls back to the uncompressed messages |
-| 8 | Cache lookup | none | Redis error degrades to a miss |
+| 7 | Cache lookup | none | Redis or embedder error degrades to a miss. Compression runs *after* this, on the miss path, so the key reflects what the caller sent |
+| 8 | Compression | none | Any failure falls back to the uncompressed messages |
 | 9 | Upstream call | `429`, `404`, `400`, `502`, `503`, `504` | Translated by `from_upstream` |
 
 ## Streaming
@@ -85,8 +89,9 @@ Awaiting the first chunk before building the response is the point: the HTTP sta
 
 | Failure | What the caller sees | What is logged |
 |---|---|---|
-| Redis down | Normal response, `X-Cache: MISS`, slower and paid | `cache.lookup.redis_error` |
-| Embedding/FAISS exception | `500 server_error` with request ID *(known gap: should degrade to a miss; fixed in Phase 5)* | `unhandled_exception` with request ID |
+| Redis down | Normal response, `X-Cache: MISS`, slower and paid. Redis calls time out after 1 s. | `cache.lookup.redis_error` |
+| Embedding failure | Normal response, `X-Cache: MISS` (semantic tier skipped; exact tier unaffected) | `cache.lookup.embed_error` |
+| Leader of a single-flight fails | Followers get the same error (not N retries). If the leader was cancelled, followers run on their own. | `upstream.error` |
 | Compression summarizer fails | Normal response, uncompressed | `compressor.failed_graceful_fallback` |
 | Provider rate limit | `429 rate_limit_error` | `upstream.error` (redacted) |
 | Provider rejects NightJar's key | `502 upstream_auth_error` | `upstream.error` |

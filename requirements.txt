@@ -54,8 +54,6 @@ cuda-pathfinder==1.8.6 ; python_full_version < '3.15' and sys_platform == 'linux
     # via cuda-bindings
 cuda-toolkit==13.2.2 ; sys_platform == 'linux'
     # via torch
-faiss-cpu==1.16.0
-    # via nightjar
 fastapi==0.115.14
     # via nightjar
 fastuuid==0.14.0 ; python_full_version < '3.15'
@@ -148,14 +146,12 @@ networkx==3.7 ; python_full_version >= '3.12'
     # via torch
 numpy==2.4.6 ; python_full_version < '3.12'
     # via
-    #   faiss-cpu
     #   nightjar
     #   scikit-learn
     #   scipy
     #   transformers
 numpy==2.5.4 ; python_full_version >= '3.12'
     # via
-    #   faiss-cpu
     #   nightjar
     #   scikit-learn
     #   scipy
@@ -205,7 +201,6 @@ openai==3.50.0
     # via litellm
 packaging==26.3
     # via
-    #   faiss-cpu
     #   huggingface-hub
     #   litellm
     #   transformers

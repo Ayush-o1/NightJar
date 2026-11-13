@@ -61,7 +61,10 @@ class TelemetryMiddleware:
                 "similarity_score": state.get("similarity_score"),
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
-                "estimated_cost_usd": estimate_cost(state.get("model_used") or "", prompt_tokens, completion_tokens),
+                # A cache hit made no provider call, so it cost nothing. Its token counts are kept so
+                # savings can be computed from them.
+                "estimated_cost_usd": 0.0 if state.get("cache_hit") else estimate_cost(
+                    state.get("model_used") or "", prompt_tokens, completion_tokens),
                 "latency_ms": round(latency_ms, 2),
                 "compressed": state.get("compressed", False),
                 "compression_ratio": state.get("compression_ratio", 1.0),
