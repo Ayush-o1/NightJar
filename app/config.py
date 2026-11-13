@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     compress_summary_model: str = "gpt-3.5-turbo"
     # --- Model Routing ---
     preferred_provider: str = "openai"
+    # explicit (default): honour the model the caller asked for; route only for the alias
+    # "nightjar/auto" or the override header. always: route every request. off: never switch.
+    routing_mode: str = "explicit"
+    # Comma-separated allow-list for caller-chosen models (requested model and the override
+    # header). Empty = any model. Tier models configured by the operator are always allowed.
+    allowed_models: str = ""
     # --- Logging ---
     log_level: str = "INFO"
     # --- Storage Paths ---
@@ -82,6 +88,10 @@ class Settings(BaseSettings):
         """Parsed, non-empty list of accepted gateway bearer tokens."""
         raw = ",".join([self.nightjar_api_keys, self.contextforge_api_keys])
         return [k.strip() for k in raw.split(",") if k.strip()]
+
+    @property
+    def allowed_model_list(self) -> list[str]:
+        return [m.strip() for m in self.allowed_models.split(",") if m.strip()]
 
     @property
     def deprecated_settings_in_use(self) -> list[str]:

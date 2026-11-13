@@ -108,6 +108,7 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
         test_mode=settings.test_mode,
         simple_model=settings.simple_model,
         complex_model=settings.complex_model,
+        routing_mode=settings.routing_mode,
     )
     application.state.router = router
 
@@ -225,6 +226,7 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
 
         # --- Model routing ---
         override_model = get_header(request, "model-override")
+        _enforce_model_policy(settings, body.model, override_model)
         routing = router.route(body.model, messages_dicts, override_model=override_model)
         request.state.model_used = routing.model_selected
         request.state.tier = routing.tier.value
@@ -308,6 +310,26 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
             status_code=exc.status_code, detail=redact_secrets(exc.detail)[:300],
         )
         raise from_upstream(exc.status_code, exc.detail) from exc
+
+
+def _enforce_model_policy(settings: Settings, requested: str, override: str | None) -> None:
+    """Reject caller-chosen models outside ALLOWED_MODELS (when set).
+
+    Applies to the requested model and to the override header. The routing alias and the
+    operator-configured tier models are always allowed. This bounds which models a caller
+    can spend money on; per-key limits come with the access-control phase.
+    """
+    allowed = settings.allowed_model_list
+    if not allowed:
+        return
+    from app.router import ROUTING_ALIAS
+
+    for name, param in ((override, "X-NightJar-Model-Override"), (requested, "model")):
+        if name and name != ROUTING_ALIAS and name not in allowed:
+            raise NightJarError(
+                403, f"Model {name!r} is not allowed on this gateway.",
+                type="permission_error", code="model_not_allowed", param=param,
+            )
 
 
 async def _stream_response(proxy_client: ProxyClient, body: ChatCompletionRequest, routing) -> StreamingResponse:

@@ -20,7 +20,7 @@ A proxy is a better place for it: the app changes one URL, and caching, routing,
 
 ## What it does
 
-1. **Model routing** — classifies each prompt as `simple` or `complex` from token count and keyword rules, then picks the matching model tier (e.g. `gpt-3.5-turbo` vs `gpt-4o`). Rules live in `config/routing_rules.yaml`. Measured at ~88% accuracy against a labeled 1,000-prompt set.
+1. **Model routing (opt-in)** — classifies each prompt as `simple` or `complex` from token count and keyword rules (`config/routing_rules.yaml`) and can switch to the matching model tier (e.g. `gpt-3.5-turbo` vs `gpt-4o`). By default NightJar uses the model you asked for and only routes when you request the alias `nightjar/auto` (or set `ROUTING_MODE=always`). The tier it *would* have chosen is recorded either way, so you can see the effect before enabling it. On the repo's 1,000-prompt labeled set the classifier agrees with the labels 92.8% of the time; that set is short, keyword-aligned prompts, so it shows the rules match their labels, not that cheaper models answer well. Details: [docs/BASELINE.md](docs/BASELINE.md).
 
 2. **Semantic caching** — prompts are embedded locally with `all-MiniLM-L6-v2` and matched against a FAISS index. Above the similarity threshold (default 0.92), the cached response comes back from Redis with no upstream call. The threshold auto-tunes itself from observed hit rates.
 
@@ -125,7 +125,7 @@ response = client.chat.completions.create(
 
 Responses carry diagnostic headers: `X-Cache` (HIT/MISS), `X-Similarity`, `X-Model-Tier`, `X-Model-Selected`, `X-Compressed`, `X-Compression-Ratio`.
 
-Two request headers are recognized: `X-NightJar-Model-Override` (force a model, bypass routing) and `X-NightJar-No-Compress: true`.
+Request headers: `X-NightJar-Model-Override` (force a specific model), `X-NightJar-No-Compress: true`, and `X-Request-ID` (your own trace id, echoed back). Every response carries `X-Request-ID`. The old `X-ContextForge-*` header names still work but are deprecated.
 
 ---
 
@@ -146,6 +146,10 @@ Every variable is documented inline in [`.env.example`](.env.example). The ones 
 | `ADAPTIVE_THRESHOLD_ENABLED` | `true` | Auto-tune the similarity threshold |
 | `NIGHTJAR_API_KEYS` | `""` | Comma-separated bearer tokens. Empty = auth off (local-dev default) |
 | `CORS_ALLOW_ORIGINS` | `*` | Allowed origins; credentialed CORS is never enabled |
+| `ROUTING_MODE` | `explicit` | `explicit`: honour the requested model, route only for `nightjar/auto`; `always`: route every request; `off`: never switch |
+| `ALLOWED_MODELS` | `""` | Comma-separated models callers may request/override to. Empty = any |
+| `MAX_REQUEST_BYTES` | `8388608` | Request body limit (`413` above it) |
+| `MAX_PROMPT_CHARS` | `2000000` | Text-length limit across all messages (`400` above it) |
 | `TEST_MODE` | `false` | Force the cheapest model for every request |
 
 ---
@@ -242,7 +246,7 @@ export KMP_DUPLICATE_LIB_OK=TRUE
 ## Known limitations
 
 - **Single instance.** The FAISS index and SQLite database are local files, so the cache and telemetry don't span replicas. Scaling out means a shared vector store and Postgres — upgrade paths are written up in [docs/DECISIONS.md](docs/DECISIONS.md) (ADR-001, ADR-003).
-- **Routing accuracy is measured offline only.** Live traffic has no ground-truth labels, so the ~88% figure comes from the labeled benchmark set, not production.
+- **Routing quality is not measured.** The 92.8% figure is agreement with hand-written labels on short prompts, not evidence that a cheaper model answered adequately. Live traffic has no ground truth.
 - **Compression costs a call.** Summarizing older turns is itself an LLM request, so it only pays off on genuinely long conversations — hence the token *and* turn-count gates.
 - **Costs in `telemetry` are estimates** from a static per-model table that goes stale as providers change pricing. `request_log` has the real numbers.
 - **One global similarity threshold**, not per-model or per-tenant.

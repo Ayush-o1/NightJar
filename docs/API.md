@@ -105,11 +105,21 @@ All caching, routing, compression, and telemetry features work transparently reg
 | `X-Compression-Ratio` | e.g., `0.65` | Ratio of compressed to original token count |
 | `X-Similarity` | e.g., `0.97` | Cosine similarity score (only present on cache hit) |
 
+### Model selection
+
+| `model` in the request | Result |
+|---|---|
+| a real model name (`gpt-4o`) | Used as-is (default `ROUTING_MODE=explicit`) |
+| `nightjar/auto` | NightJar classifies the prompt and picks the simple- or complex-tier model |
+| any model, with `ROUTING_MODE=always` | NightJar picks the tier model, ignoring the request (pre-2.0 behaviour) |
+
+`X-Model-Selected` and `X-Model-Tier` show what was used. The telemetry `routing_reason` is prefixed `not_applied(<mode>):` when the router classified the prompt but did not switch models, so the tier it would have used is always visible. **Changed in 2.0:** before, every request was routed.
+
 ### Special Request Headers
 
 | Header | Description |
 |--------|-------------|
-| `X-NightJar-Model-Override` | Force a specific model, bypassing the router (e.g., `gpt-4o`) |
+| `X-NightJar-Model-Override` | Force a specific model regardless of routing (e.g. `gpt-4o`). Subject to `ALLOWED_MODELS` (`403 model_not_allowed`). |
 | `X-NightJar-No-Compress` | Set to `true` to skip context compression for this request |
 
 ### Request limits
