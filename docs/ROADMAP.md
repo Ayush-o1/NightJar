@@ -86,7 +86,7 @@ Each phase ends with: tests added and passing, `ruff` clean, full suite green, a
 - **Tests:** each scope, rate limit, revoked key, timing-safe compare, secrets absent from logs.
 - **Acceptance:** [architecture/SECURITY_MODEL.md](architecture/SECURITY_MODEL.md) matches the code; leaked-secret scan of the diff.
 
-### Phase 10 — Dashboard
+### Phase 10 — Dashboard  ✅ (partly: honesty and correctness fixes, no redesign)
 - **Problem:** dashboard depends on the old endpoints; ships demo data; lives under `docs/`.
 - **Features:** moved to `app/static/`; views built from what the API actually returns (overview, request log with detail, cache by tier, routing decisions, cost with estimate labels, provider health from real error/latency data); no fabricated data (demo dataset removed, replaced with proper empty/disconnected states); keyboard and screen-reader basics; light theme.
 - **Tests:** JS unit tests for the aggregation functions; manual responsive check, with screenshots in `docs/`.

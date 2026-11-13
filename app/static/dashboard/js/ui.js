@@ -121,7 +121,7 @@ function updateConnectionStatus(connected) {
   const badge = document.getElementById('conn-badge');
   if (!badge) return;
   badge.classList.toggle('connected', connected);
-  badge.querySelector('.connection-label').textContent = connected ? 'Connected' : 'Demo data';
+  badge.querySelector('.connection-label').textContent = connected ? 'Connected' : 'Offline';
   badge.title = connected
     ? 'Reading live data from the backend'
     : "Can't reach the backend — showing a sample dataset so the UI is still browsable";

@@ -81,7 +81,13 @@ function _tierPill(tier) {
 function _cachePill(r) {
   const hit = _isHit(r);
   const sim = _field(r, 'similarity_score', 'similarity');
-  const pill = `<span class="pill ${hit ? 'hit' : 'miss'}">${hit ? 'HIT' : 'MISS'}</span>`;
+  // A failed request must not look like an ordinary miss: show the HTTP status the caller got.
+  if (r.http_status >= 400) {
+    const code = r.error_code ? ` title="${escapeHtml(r.error_code)}"` : '';
+    return `<span class="pill error"${code}>ERR ${escapeHtml(String(r.http_status))}</span>`;
+  }
+  const tier = hit && r.cache_tier && r.cache_tier !== 'exact' ? ` ${escapeHtml(r.cache_tier)}` : '';
+  const pill = `<span class="pill ${hit ? 'hit' : 'miss'}">${hit ? 'HIT' : 'MISS'}${tier}</span>`;
   if (hit && sim != null) {
     return `${pill}<span class="sim-score">${(sim * 100).toFixed(0)}%</span>`;
   }
@@ -260,19 +266,3 @@ function renderReasonTable(rows) {
 }
 
 // ─── THRESHOLD: HISTORY ──────────────────────────────────────
-function renderThresholdHistory(rows) {
-  const tbody = document.getElementById('threshold-tbody');
-  if (!tbody) return;
-
-  if (!rows.length) {
-    tbody.innerHTML = _emptyRow(3, 'No evaluations yet',
-      'Run one to record how the threshold responds to the current hit rate.');
-    return;
-  }
-
-  tbody.innerHTML = rows.map(r => `<tr>
-    <td data-label="When">${timeAgo(r.evaluated_at)}</td>
-    <td data-label="Threshold">${(r.threshold * 100).toFixed(1)}%</td>
-    <td data-label="Hit rate at the time">${(r.cache_hit_rate * 100).toFixed(1)}%</td>
-  </tr>`).join('');
-}

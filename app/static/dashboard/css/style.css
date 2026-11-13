@@ -658,6 +658,11 @@ tr:hover .copy-btn { opacity: 1; }
   color: var(--success);
   border-color: var(--success-border);
 }
+.pill.error {
+  background: var(--danger-subtle, #fdecec);
+  color: var(--danger, #b42318);
+  border-color: var(--danger-border, #f4c7c3);
+}
 .pill.miss {
   background: var(--bg-subtle);
   color: var(--text-secondary);

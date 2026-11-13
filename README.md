@@ -182,9 +182,13 @@ Schemas and examples: [docs/API.md](docs/API.md).
 
 Open `http://localhost:8000/dashboard/` while the backend is running.
 
-Shows the request log, cache hit rate, model and tier distribution, latency and cost trends, routing-reason breakdown, — all computed from real `/v1/*` responses. If it can't reach a backend it falls back to a demo dataset and says so in the header badge.
+![Dashboard overview](docs/images/dashboard-overview.png)
 
-It's plain HTML, CSS and JavaScript with Chart.js — no build step, no framework. Tables collapse into stacked records on narrow screens, colour is only used where it means something (a cache hit saved a call; a slow request needs a look), and every screen has a real empty state instead of a blank panel.
+*Overview after nine requests sent to a local fake provider (including one deliberate provider failure, shown as `ERR 502`). Not production data.*
+
+Shows the request log (with the HTTP status of failed requests), cache hit rate and tier, model and routing-tier distribution, latency and cost trends, and cache statistics, all computed from real `/v1/*` responses. With no reachable backend it shows an "Offline" state and empty pages; it ships no sample data. Costs are estimates from token counts.
+
+It is plain HTML, CSS and JavaScript with Chart.js, no build step or framework, served from `app/static/dashboard/`. Checked at desktop width and at a true 390 px viewport (two-up metric cards, no horizontal overflow). When auth is on, store a key once in the browser console: `localStorage.setItem('nightjar_api_key', '<admin key>')`. Not done: automated browser tests, an accessibility audit, request-detail and provider-health views.
 
 ---
 

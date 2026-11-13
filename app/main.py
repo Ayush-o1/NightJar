@@ -176,7 +176,7 @@ app.add_middleware(RequestContextMiddleware, max_body_bytes=_settings_for_cors.m
 install_error_handlers(app)
 
 # ─── Mount static dashboard at /dashboard ────────────────────────────────
-_dashboard_dir = Path(__file__).resolve().parent.parent / "docs" / "dashboard"
+_dashboard_dir = Path(__file__).resolve().parent / "static" / "dashboard"
 if _dashboard_dir.exists():
     app.mount("/dashboard", StaticFiles(directory=str(_dashboard_dir), html=True), name="dashboard")
 

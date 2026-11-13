@@ -13,7 +13,6 @@ const PAGE_TITLES = {
   cache: 'Cache',
   router: 'Router',
   telemetry: 'Telemetry',
-  threshold: 'Threshold',
 };
 
 // ─── NAVIGATION ──────────────────────────────────────────────
@@ -45,14 +44,11 @@ function navigateTo(pageId) {
     case 'cache': initCachePage(_appData); break;
     case 'router': initRouterPage(_appData); break;
     case 'telemetry': initTelemetryPage(_appData); break;
-    case 'threshold': initThresholdPage(); break;
   }
 }
 
 // ─── AGGREGATION ─────────────────────────────────────────────
-// These run identically over live API records and the demo dataset in
-// data.js, so there is one code path for turning a list of requests into
-// charts — the demo view can't drift from what the real one would show.
+// These turn the list of requests returned by the API into chart data.
 
 function getTimeRangeCutoff(range) {
   const spans = {
@@ -192,64 +188,6 @@ function initTelemetryPage(data) {
   initHitRateChart(daily, empty);
 }
 
-function initThresholdPage() {
-  loadThresholdInfo();
-}
-
-async function loadThresholdInfo() {
-  if (!_connected) {
-    setText('threshold-current', '—');
-    setText('threshold-baseline', '—');
-    setText('threshold-evaluated', 'Backend offline');
-    renderThresholdHistory([]);
-    return;
-  }
-  try {
-    const [infoRes, histRes] = await Promise.all([
-      apiFetch('/v1/threshold'),
-      apiFetch('/v1/threshold/history?limit=20'),
-    ]);
-    const info = await infoRes.json();
-    const hist = await histRes.json();
-
-    setText('threshold-current', `${(info.current_threshold * 100).toFixed(1)}%`);
-    setText('threshold-baseline', `${(info.baseline * 100).toFixed(1)}%`);
-    setText('threshold-evaluated', info.last_evaluated_at ? timeAgo(info.last_evaluated_at) : 'Never');
-    renderThresholdHistory(hist.records || []);
-  } catch {
-    setText('threshold-current', '—');
-    setText('threshold-baseline', '—');
-    setText('threshold-evaluated', 'Unavailable');
-    renderThresholdHistory([]);
-  }
-}
-
-// ─── ACTIONS ─────────────────────────────────────────────────
-async function handleEvaluateThreshold() {
-  const btn = document.getElementById('btn-evaluate-threshold');
-  if (!btn) return;
-
-  if (!_connected) {
-    showToast("Can't run an evaluation while the backend is unreachable", 'error');
-    return;
-  }
-
-  setButtonLoading(btn, 'Running…');
-  try {
-    const resp = await apiFetch('/v1/threshold/evaluate', { method: 'POST' });
-    const data = await resp.json();
-    showToast(
-      `Threshold is now ${(data.threshold * 100).toFixed(1)}% — hit rate was ${(data.cache_hit_rate * 100).toFixed(1)}%`,
-      'success',
-    );
-    await loadThresholdInfo();
-  } catch {
-    showToast("Evaluation failed — the backend didn't respond", 'error');
-  } finally {
-    resetButton(btn);
-  }
-}
-
 function handleClearCache() {
   if (!_connected) {
     showToast("Can't clear the cache while the backend is unreachable", 'error');
@@ -354,7 +292,8 @@ function normalizeApiRecord(r) {
     model: r.model_used || r.model_requested, model_used: r.model_used,
     tokens_in: r.prompt_tokens || 0, tokens_out: r.completion_tokens || 0,
     latency_ms: r.latency_ms || 0, cost: r.estimated_cost_usd || 0,
-    cache_status: r.cache_hit ? 'HIT' : 'MISS', cache_hit: !!r.cache_hit,
+    http_status: r.http_status ?? null, error_code: r.error_code || null, cache_tier: r.cache_tier || null,
+    cache_status: (r.http_status >= 400) ? 'ERROR' : (r.cache_hit ? 'HIT' : 'MISS'), cache_hit: !!r.cache_hit,
     similarity_score: r.similarity_score,
     compressed: r.compressed || false, compression_ratio: r.compression_ratio || 1.0,
     tier: r.tier || null, routing_reason: r.routing_reason || null,
@@ -401,17 +340,15 @@ async function loadData() {
       // quietly swapping in demo numbers that look real.
       _connected = false;
       updateConnectionStatus(false);
-      showToast("Backend reachable but didn't return data — showing demo data", 'warning');
+      showToast("Backend reachable but didn't return data", 'warning');
     }
   }
-  useDemoData();
-}
-
-function useDemoData() {
+  // No backend, no data. There is deliberately no sample dataset: an invented request log that
+  // looks real is worse than an empty page.
   _appData = {
-    summary: DEMO_SUMMARY,
-    requests: DEMO_REQUESTS,
-    cacheStats: DEMO_CACHE_STATS,
+    summary: normalizeApiSummary({}),
+    requests: [],
+    cacheStats: {},
   };
 }
 
@@ -480,7 +417,6 @@ function bindEvents() {
       case 'goto-requests': navigateTo('requests'); break;
       case 'export-csv': handleExportCSV(); break;
       case 'clear-cache': handleClearCache(); break;
-      case 'evaluate-threshold': handleEvaluateThreshold(); break;
       case 'toggle-live-refresh': toggleLiveRefresh(); break;
       case 'close-modal':
       case 'cancel-modal': hideModal(actionEl.closest('.modal-overlay')?.id); break;

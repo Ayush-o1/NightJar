@@ -44,7 +44,6 @@ COPY --from=builder /root/.cache /home/appuser/.cache
 # Copy application code
 COPY app/ ./app/
 COPY config/ ./config/
-COPY docs/dashboard/ ./docs/dashboard/
 
 # Create data directory for SQLite and FAISS persistence
 RUN mkdir -p /app/data && chown -R appuser:appuser /app /home/appuser/.cache

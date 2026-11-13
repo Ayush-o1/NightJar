@@ -24,7 +24,7 @@
     <!-- ─── SIDEBAR ─── -->
     <aside id="sidebar" class="sidebar">
       <div class="sidebar-brand">
-        <div class="sidebar-brand-icon" aria-hidden="true">CF</div>
+        <div class="sidebar-brand-icon" aria-hidden="true">NJ</div>
         <span class="sidebar-brand-text">NightJar</span>
       </div>
 
@@ -54,10 +54,6 @@
         </button>
 
         <div class="sidebar-section-label">System</div>
-        <button type="button" class="nav-item" data-page="threshold">
-          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
-          <span class="nav-item-text">Threshold</span>
-        </button>
       </nav>
 
       <div class="sidebar-footer">
@@ -209,6 +205,7 @@
               <option value="">All cache results</option>
               <option value="HIT">Cache hits</option>
               <option value="MISS">Cache misses</option>
+              <option value="ERROR">Failed requests</option>
             </select>
             <label class="sr-only" for="tier-filter">Filter by tier</label>
             <select id="tier-filter" class="select-input">
@@ -281,7 +278,7 @@
             <div class="metric-card">
               <div class="metric-label">
                 <svg class="metric-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/></svg>
-                Match threshold
+                Semantic threshold
               </div>
               <div class="metric-value" id="cache-threshold">—</div>
               <div class="metric-hint">similarity needed for a hit</div>
@@ -434,64 +431,6 @@
           </div>
         </section>
 
-        <!-- ══ THRESHOLD ══ -->
-        <section id="page-threshold" class="page">
-          <div class="page-header">
-            <p class="page-subtitle">How close a match has to be before a cached answer is reused. It tunes itself from the hit rate.</p>
-            <button type="button" id="btn-evaluate-threshold" class="btn btn-primary btn-sm" data-action="evaluate-threshold">Run evaluation</button>
-          </div>
-
-          <div class="metrics-grid">
-            <div class="metric-card">
-              <div class="metric-label">
-                <svg class="metric-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/></svg>
-                In effect now
-              </div>
-              <div class="metric-value" id="threshold-current">—</div>
-              <div class="metric-hint">similarity required for a hit</div>
-            </div>
-            <div class="metric-card">
-              <div class="metric-label">
-                <svg class="metric-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="3"/><line x1="12" y1="8" x2="12" y2="21"/><path d="M5 12H2a10 10 0 0 0 20 0h-3"/></svg>
-                Configured baseline
-              </div>
-              <div class="metric-value" id="threshold-baseline">—</div>
-              <div class="metric-hint">from SIMILARITY_THRESHOLD</div>
-            </div>
-            <div class="metric-card">
-              <div class="metric-label">
-                <svg class="metric-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>
-                Last evaluated
-              </div>
-              <div class="metric-value" id="threshold-evaluated" style="font-size:17px">—</div>
-              <div class="metric-hint">runs on demand</div>
-            </div>
-          </div>
-
-          <div class="note">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-            <span>Above a <strong>60%</strong> hit rate the threshold tightens by 0.01, so only closer matches count. Below <strong>20%</strong> it loosens. In between it stays put.</span>
-          </div>
-
-          <div class="table-card">
-            <div class="table-card-header">
-              <div class="table-card-title">Evaluation history</div>
-            </div>
-            <div class="table-wrapper">
-              <table>
-                <thead>
-                  <tr>
-                    <th scope="col">When</th>
-                    <th scope="col">Threshold</th>
-                    <th scope="col">Hit rate at the time</th>
-                  </tr>
-                </thead>
-                <tbody id="threshold-tbody"></tbody>
-              </table>
-            </div>
-          </div>
-        </section>
-
       </div><!-- /page-container -->
     </div><!-- /main-area -->
   </div><!-- /dashboard -->
@@ -516,7 +455,6 @@
   <div id="toast-container" class="toast-container" role="status" aria-live="polite"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-  <script src="js/data.js"></script>
   <script src="js/ui.js"></script>
   <script src="js/charts.js"></script>
   <script src="js/tables.js"></script>
