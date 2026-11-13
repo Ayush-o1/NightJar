@@ -101,7 +101,7 @@ Integration tests against real Redis (CI service container); fake-upstream end-t
 ### Phase 13 — Deployment and operations  ✅ (arm64 verified; x86_64 not)
 Image without dev dependencies; Redis not published to the host and password-protected by default in compose; compose health checks and resource notes; `/health` (liveness) and `/ready` (dependencies); env documentation; backup/restore notes for SQLite and the FAISS snapshot; runbook; troubleshooting. Docker daemon was unavailable at baseline, so the build must be verified, or reported as unverified.
 
-### Phase 14 — Final integration and release  ✅ (not merged to main, by design)
+### Phase 14 — Final integration and release  ✅ (phases 8–14 not yet merged to main)
 README rewrite; API docs; [LEARNING_GUIDE.md](LEARNING_GUIDE.md); [INTERVIEW_PREPARATION.md](INTERVIEW_PREPARATION.md) (grounded only in shipped code); migration guide; changelog; full verification pass; tag candidate. Not merged to `main` automatically.
 
 ## Documentation deliverables by phase

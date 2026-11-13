@@ -1,6 +1,8 @@
 # Implementation status
 
-Branch: `feature/nightjar-modernization` (from `main` @ `1a4819c`). Not merged to `main`.
+Branch: `feature/nightjar-modernization` (from `main` @ `1a4819c`).
+
+**Merge state:** the repository owner merged PR #15 and PR #16 into `main` on 2026-11-13, which carry phases 0–7 (up to `eb164d1`). Phases 8–14 and the fixes made after that (telemetry, security, benchmarks, dashboard, Docker, docs, test isolation) are on the branch only. A dry-run merge of the current `main` into the branch is clean. I did not merge anything into `main` myself.
 
 | Phase | Status | Notes |
 |---|---|---|
@@ -18,7 +20,7 @@ Branch: `feature/nightjar-modernization` (from `main` @ `1a4819c`). Not merged t
 | 11 Performance and benchmarking | Mostly done | `gateway_bench.py` against a fake provider (overhead, exact/semantic hit latency, errors, RSS), profile of where overhead goes, fabricated `--dry-run` removed, CI runs a real smoke benchmark. 455 tests. **Not done:** a load generator that can find the gateway's real throughput ceiling; real-provider measurements; multi-run statistics. |
 | 12 Testing and quality | Done (continuous) | 462 tests (175 at baseline): cache tests against a real Redis, reliability tests against a fake provider over real HTTP (including client disconnect over a real socket), env-var/docs consistency tests, migration tested against a database written by the real 1.x code, per-test isolation of `os.environ`, `app.state`, `.env` and caches. CI runs lint, a lockfile-sync check, the suite with a Redis service, and a real smoke benchmark. **Not done:** a coverage report, mutation testing, browser tests, tests against a real provider. |
 | 13 Deployment and operations | Done (arm64 verified) | Image built and run: 2.55 GB, CPU-only torch, non-root, healthy; zero-keys-is-closed, MISS then HIT through the container's own Redis, Redis not exposed. Found and fixed: `.env.example`'s `NIGHTJAR_AUTH=auto` silently overrode the image's `required`; CUDA packages in the exported lock defeated CPU-only torch; compose `REDIS_URL` pointed at the container itself. [operations/DEPLOYMENT](operations/DEPLOYMENT.md), [TROUBLESHOOTING](operations/TROUBLESHOOTING.md). **Not verified:** x86_64 build, resource limits, soak, TLS, real provider. |
-| 14 Final integration and release | Done except merge | README rewritten, ARCHITECTURE index, MIGRATION_2.0, CHANGELOG, LEARNING_GUIDE, INTERVIEW_PREPARATION, final verification from a clean clone. **Not merged to `main`** by design; a PR can be opened from the branch. |
+| 14 Final integration and release | Done except merge | README rewritten, ARCHITECTURE index, MIGRATION_2.0, CHANGELOG, LEARNING_GUIDE, INTERVIEW_PREPARATION, final verification from a clean clone. Phases 0–7 are on `main` (merged by the owner via PR #15/#16); phases 8–14 await a PR from the branch. |
 
 ## Known blockers and limitations
 
