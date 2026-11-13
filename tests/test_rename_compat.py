@@ -105,3 +105,13 @@ class TestDocumentedEnvVarNames:
         documented = set(re.findall(r"(?m)^([A-Z][A-Z0-9_]+)=", text))
         fields = {name.upper() for name in Settings.model_fields}
         assert documented - fields == set(), f"in .env.example but not a setting: {documented - fields}"
+
+
+def test_a_local_dotenv_cannot_change_test_behaviour(tmp_path, monkeypatch):
+    """The suite points NIGHTJAR_ENV_FILE at an empty file. A real .env with keys in it must not be seen."""
+    import os
+
+    assert os.environ["NIGHTJAR_ENV_FILE"] == os.devnull
+    assert os.environ["LITELLM_MODE"] == "PRODUCTION"  # otherwise litellm loads the repo .env into os.environ
+    assert Settings().api_keys == []
+    assert "NIGHTJAR_API_KEYS" not in os.environ

@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+import os as _os
+
+# Before anything imports app.config or litellm: never read a developer's .env during tests.
+# Two readers exist: our own Settings (NIGHTJAR_ENV_FILE) and LiteLLM, which calls load_dotenv() on import
+# unless LITELLM_MODE=PRODUCTION, and finds the repo's .env by walking up from its package in .venv/.
+_os.environ["NIGHTJAR_ENV_FILE"] = _os.devnull
+_os.environ["LITELLM_MODE"] = "PRODUCTION"
+
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock

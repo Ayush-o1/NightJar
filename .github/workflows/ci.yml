@@ -36,6 +36,8 @@ jobs:
         run: uv run pytest tests/ -v --tb=short
         env:
           PYTHONPATH: .
+      - name: Install the redis-server binary (the benchmark starts its own throwaway instance)
+        run: sudo apt-get update && sudo apt-get install -y redis-server
       - name: Gateway benchmark smoke run (real processes, fake provider; fails on errors, not on speed)
         run: uv run python benchmarks/gateway_bench.py --smoke
         env:

@@ -10,7 +10,7 @@ Yes, for what this is: a single-node gateway whose writes are one small row per 
 |---|---|---|
 | More than one NightJar replica sharing telemetry and keys | SQLite is a local file | Single instance (documented limit) |
 | Sustained writes beyond one writer's capacity | SQLite serialises writers | One row per request; not measured as a bottleneck (Phase 11 measures write cost) |
-| Analytical queries over months of history | Needs real indexes, partitioning | 90-day default retention |
+| Analytical queries over months of history | Needs real indexes, partitioning | Retention is opt-in; history grows unbounded by default |
 
 Migrating would add a server to operate and a migration framework (Alembic) for a schema of three tables. If it becomes necessary, the access code is isolated in `app/telemetry.py` and `app/keys.py`.
 
@@ -56,7 +56,7 @@ Upgrade: start the new version against the old file. Downgrade is not supported 
 
 - A telemetry write that fails does **not** fail the request, but is no longer silent: it is logged (`telemetry.write_failed`), counted, and `/health` reports `telemetry_write_failures`.
 - Writes run in a worker thread so they cannot block the event loop. Each write opens a short-lived connection under a process-wide lock; there is no batching queue (not built, and not shown to be needed).
-- `TELEMETRY_RETENTION_DAYS` (default 90; 0 keeps everything) deletes older rows at startup. It runs only at startup, so a long-running process does not prune until restart.
+- `TELEMETRY_RETENTION_DAYS` deletes rows older than N days at startup. **The default is 0 (keep everything): pruning is opt-in**, so upgrading never removes existing data. It runs only at startup, so a long-running process does not prune until restart.
 
 ## Known gaps
 

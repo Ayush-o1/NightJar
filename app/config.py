@@ -1,4 +1,5 @@
 """Pydantic Settings configuration loaded from .env file."""
+import os
 from functools import lru_cache
 from typing import Literal
 
@@ -64,8 +65,9 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     # --- Storage Paths ---
     sqlite_db_path: str = "./data/telemetry.db"
-    # Telemetry older than this is deleted at startup. 0 keeps everything.
-    telemetry_retention_days: int = 90
+    # Telemetry older than this many days is DELETED at startup. 0 (default) keeps everything: pruning
+    # is opt-in so an upgrade can never remove existing data.
+    telemetry_retention_days: int = 0
     vector_index_path: str = "./data/vectors.npz"
     # --- Test Mode ---
     test_mode: bool = False
@@ -122,7 +124,11 @@ class Settings(BaseSettings):
         """Parsed CORS allow-origins list."""
         return [o.strip() for o in self.cors_allow_origins.split(",") if o.strip()]
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
+    # NIGHTJAR_ENV_FILE lets the test suite point at an empty file, so a developer's own .env can never change
+    # test behaviour (a local NIGHTJAR_API_KEYS once turned every test into a 401).
+    model_config = {
+        "env_file": os.environ.get("NIGHTJAR_ENV_FILE", ".env"), "env_file_encoding": "utf-8", "extra": "ignore",
+    }
 
 
 @lru_cache
